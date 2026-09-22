@@ -6,6 +6,9 @@
   "scripts": {
     "dev": "npx --yes concurrently -n \"FRONT,BACK\" -c \"cyan,magenta\" \"npm --prefix frontend run dev\" \"npm --prefix backend run dev\"",
     "dev:front": "npm --prefix frontend run dev",
-    "dev:back": "npm --prefix backend run dev"
+    "dev:back": "npm --prefix backend run dev",
+    "supabase:login": "npx supabase login",
+    "supabase:link": "npx supabase link",
+    "vercel:deploy": "npx vercel"
   }
 }

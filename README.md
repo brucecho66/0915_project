@@ -44,10 +44,17 @@ Supabase 대시보드의 **Project Settings** -> **API** 메뉴에서 URL과 Key
 PORT=5000
 CLIENT_URL=*
 
-# Supabase API 설정
+# [Vercel CLI & 배포 토큰]
+VERCEL_TOKEN=your_vercel_access_token_here
+VERCEL_ORG_ID=your_vercel_org_id_here
+VERCEL_PROJECT_ID=your_vercel_project_id_here
+
+# [Supabase 클라우드 & CLI 접근 토큰]
 SUPABASE_URL=https://your-project-ref.supabase.co
-SUPABASE_SERVICE_ROLE_KEY=your-supabase-service-role-key
+SUPABASE_PROJECT_ID=your_project_ref_here
 SUPABASE_ANON_KEY=your-supabase-anon-key
+SUPABASE_SERVICE_ROLE_KEY=your-supabase-service-role-key
+SUPABASE_ACCESS_TOKEN=your_supabase_personal_access_token_here
 
 # JWT & 암호화 설정
 JWT_SECRET=your_jwt_secret_key_here
@@ -60,7 +67,29 @@ ADMIN_PASSWORD=admin660520!
 ADMIN_NAME=bodyguard
 ```
 
-### 3. Vercel 프론트엔드 환경 변수 설정
+### 3. CLI 접근 및 활용 방법
+#### ⚡ Supabase CLI 활용
+```bash
+# 개인 엑세스 토큰으로 CLI 로그인
+npx supabase login --token $SUPABASE_ACCESS_TOKEN
+
+# 원격 프로젝트 링크
+npx supabase link --project-ref $SUPABASE_PROJECT_ID
+
+# 원격 Supabase DB에 스키마 직접 푸시
+npx supabase db push
+```
+
+#### ⚡ Vercel CLI 활용
+```bash
+# Vercel 토큰을 활용한 직접 배포
+npx vercel --token $VERCEL_TOKEN
+
+# 프로덕션 배포
+npx vercel --prod --token $VERCEL_TOKEN
+```
+
+### 4. Vercel 프론트엔드 환경 변수 설정
 Vercel 대시보드의 **Settings** -> **Environment Variables**에서 다음 항목을 추가합니다:
 - `VITE_API_URL`: 배포된 백엔드 서버의 API 주소 (예: `https://your-backend.railway.app/api` 또는 `https://your-backend.onrender.com/api`)
 
