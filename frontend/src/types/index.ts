@@ -1,0 +1,41 @@
+export interface Post {
+  id: number;
+  title: string;
+  content: string;
+  author: string;
+  userId?: number | null;
+  createdAt: string;
+  updatedAt?: string;
+  views: number;
+  likes: number;
+  dislikes?: number;
+  userReaction?: 'like' | 'dislike' | null;
+  isHidden?: boolean;
+  commentCount?: number;
+}
+
+export interface User {
+  id: number;
+  email: string;
+  username: string;
+  role?: 'admin' | 'user';
+  bio?: string;
+  joinedAt: string;
+}
+
+export interface Comment {
+  id: number;
+  postId: number;
+  userId?: number | null;
+  author: string;
+  content: string;
+  isHidden?: boolean;
+  isMasked?: boolean;
+  createdAt: string;
+  updatedAt?: string;
+}
+
+export interface AdminComment extends Comment {
+  postTitle?: string;
+}
+

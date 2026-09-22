@@ -1,0 +1,11 @@
+{
+  "name": "community-project",
+  "version": "1.0.0",
+  "private": true,
+  "description": "Fullstack community board project (React + Vite & Node.js Express + SQLite)",
+  "scripts": {
+    "dev": "npx --yes concurrently -n \"FRONT,BACK\" -c \"cyan,magenta\" \"npm --prefix frontend run dev\" \"npm --prefix backend run dev\"",
+    "dev:front": "npm --prefix frontend run dev",
+    "dev:back": "npm --prefix backend run dev"
+  }
+}
