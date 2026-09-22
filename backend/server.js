@@ -354,7 +354,7 @@ app.get('/api/posts', (req, res) => {
   }
 });
 
-// 게시글 상세 조회 (SQLite DB 연동 & 조회수 증가 & 사용자 반응 확인)
+// 게시글 상세 조회 (SQLite DB 연동 & 사용자 반응 확인)
 app.get('/api/posts/:id', (req, res) => {
   try {
     const post = db.prepare(`
@@ -372,9 +372,8 @@ app.get('/api/posts/:id', (req, res) => {
       return res.status(404).json({ error: '게시글을 찾을 수 없습니다.' });
     }
 
-    // 조회수 1 증가 (SQLite UPDATE)
-    db.prepare('UPDATE posts SET views = views + 1 WHERE id = ?').run(req.params.id);
-    post.views = Number(post.views || 0) + 1;
+    // 조회수 자동 증가는 GET에서 하지 않고 클라이언트의 세션/로컬 스토리지 검증 후 /view API에서 단 1회 수행
+    post.views = Number(post.views || 0);
     post.likes = Number(post.likes || 0);
     post.dislikes = Number(post.dislikes || 0);
     post.isHidden = Boolean(post.isHidden);
@@ -408,15 +407,39 @@ app.get('/api/posts/:id', (req, res) => {
   }
 });
 
-// 게시글 조회수 전용 증가 API (명시적 호출용)
+// 게시글 조회수 증가 API (로그인 유저만 카운트 처리)
 app.post('/api/posts/:id/view', (req, res) => {
   try {
     const post = db.prepare('SELECT id, views FROM posts WHERE id = ?').get(req.params.id);
     if (!post) {
       return res.status(404).json({ error: '게시글을 찾을 수 없습니다.' });
     }
+
+    // 로그인 사용자 확인 (JWT 토큰 또는 body의 userId)
+    let currentUserId = null;
+    const authHeader = req.headers.authorization;
+    if (authHeader && authHeader.startsWith('Bearer ')) {
+      try {
+        const decoded = jwt.verify(authHeader.split(' ')[1], JWT_SECRET);
+        currentUserId = decoded.id;
+      } catch (e) {}
+    }
+    if (!currentUserId && req.body?.userId) {
+      currentUserId = Number(req.body.userId);
+    }
+
+    // 로그인 유저가 아닌 경우 조회수 카운트를 하지 않고 현재 조회수 반환
+    if (!currentUserId) {
+      return res.json({
+        success: false,
+        message: '로그인 회원만 조회수가 카운트됩니다.',
+        views: Number(post.views || 0),
+      });
+    }
+
     db.prepare('UPDATE posts SET views = views + 1 WHERE id = ?').run(req.params.id);
-    res.json({ success: true, views: post.views + 1 });
+    const updatedViews = Number(post.views || 0) + 1;
+    res.json({ success: true, views: updatedViews });
   } catch (error) {
     console.error('조회수 증가 에러:', error);
     res.status(500).json({ error: '조회수 증가에 실패했습니다.' });

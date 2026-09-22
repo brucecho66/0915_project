@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useRef } from 'react';
 import { useParams, useNavigate, Link } from 'react-router-dom';
 import { usePosts } from '../context/PostContext';
 import type { Post, Comment } from '../types';
@@ -10,6 +10,7 @@ export const PostDetailPage: React.FC = () => {
     getPost,
     deletePost,
     reactPost,
+    incrementPostView,
     user,
     adminUser,
     addComment,
@@ -44,6 +45,9 @@ export const PostDetailPage: React.FC = () => {
   const [editingContent, setEditingContent] = useState('');
   const [isSavingComment, setIsSavingComment] = useState(false);
 
+  // 조회수 중복 증가(2씩 증가) 방지용 Ref
+  const hasIncrementedRef = useRef<number | null>(null);
+
   // 2. 게시글 최신 정보 및 댓글 목록 로드
   useEffect(() => {
     if (!id) return;
@@ -63,7 +67,7 @@ export const PostDetailPage: React.FC = () => {
 
     let isCurrent = true;
 
-    // 백엔드 API에서 최신 조회수/상세 정보 및 댓글 목록 병렬 조회
+    // 백엔드 API에서 최신 상세 정보 및 댓글 목록 병렬 조회
     const token = localStorage.getItem('user_token') || localStorage.getItem('admin_token');
     const authHeaders: Record<string, string> = token ? { Authorization: `Bearer ${token}` } : {};
 
@@ -90,6 +94,16 @@ export const PostDetailPage: React.FC = () => {
           if (commentsData) {
             setComments(commentsData);
           }
+
+          // 로그인 유저 체크 & 로컬 스토리지 세션 확인 후 조회수 1회 증가 (중복 및 2씩 증가 방지)
+          if (hasIncrementedRef.current !== postId) {
+            hasIncrementedRef.current = postId;
+            incrementPostView(postId).then((newViews) => {
+              if (isCurrent && typeof newViews === 'number' && newViews > 0) {
+                setPost((prev) => (prev ? { ...prev, views: newViews } : prev));
+              }
+            });
+          }
         }
       })
       .catch((err) => {
@@ -104,7 +118,7 @@ export const PostDetailPage: React.FC = () => {
     return () => {
       isCurrent = false;
     };
-  }, [id, getPost]);
+  }, [id, getPost, incrementPostView]);
 
   const isAuthor = Boolean(
     post &&

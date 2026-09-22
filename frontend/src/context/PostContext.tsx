@@ -30,6 +30,7 @@ interface PostContextType {
   updatePost: (id: number, title: string, content: string) => Promise<{ success: boolean; message?: string; post?: Post }>;
   toggleHidePost: (id: number) => Promise<{ success: boolean; isHidden?: boolean; message?: string }>;
   getPost: (id: number) => Post | undefined;
+  incrementPostView: (id: number) => Promise<number>;
   deletePost: (id: number) => Promise<void>;
   deleteUser: (id: number) => Promise<void>;
   addComment: (postId: number, content: string, author?: string) => Promise<{ success: boolean; comment?: Comment; message?: string }>;
@@ -188,6 +189,67 @@ export const PostProvider: React.FC<{ children: React.ReactNode }> = ({ children
 
   const getPost = (id: number) => {
     return posts.find((p) => p.id === id);
+  };
+
+  // 로그인 유저 체크 & 로컬 스토리지 세션 확인 후 조회수 1회 증가
+  const incrementPostView = async (id: number): Promise<number> => {
+    // 1. 로그인 유저 여부 체크 (로그인 회원만 조회수 카운트)
+    const currentUid = user?.id || adminUser?.id;
+    if (!currentUid) {
+      const current = posts.find((p) => p.id === id);
+      return current?.views || 0;
+    }
+
+    // 2. 로컬 스토리지에서 해당 유저의 조회 기록 확인
+    const storageKey = `viewed_posts_user_${currentUid}`;
+    let viewedList: number[] = [];
+    try {
+      const saved = localStorage.getItem(storageKey);
+      if (saved) {
+        viewedList = JSON.parse(saved);
+      }
+    } catch (e) {
+      viewedList = [];
+    }
+
+    // 이미 해당 유저가 조회한 게시글이면 중복 증가하지 않고 현재 조회수 반환
+    if (viewedList.includes(id)) {
+      const current = posts.find((p) => p.id === id);
+      return current?.views || 0;
+    }
+
+    // 3. 신규 조회: 로컬 스토리지에 즉시 기록하여 중복 호출 차단
+    viewedList.push(id);
+    localStorage.setItem(storageKey, JSON.stringify(viewedList));
+
+    // 4. 백엔드 조회수 1 증가 API 호출 (로그인 유저 ID 전달)
+    try {
+      const token = userToken || adminToken || localStorage.getItem('user_token') || localStorage.getItem('admin_token');
+      const res = await fetch(`${API_BASE}/posts/${id}/view`, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          ...(token ? { Authorization: `Bearer ${token}` } : {}),
+        },
+        body: JSON.stringify({ userId: currentUid }),
+      });
+
+      if (res.ok) {
+        const data = await res.json();
+        if (data.success && typeof data.views === 'number') {
+          // 전체 posts 상태의 views 동기화
+          setPosts((prev) =>
+            prev.map((p) => (p.id === id ? { ...p, views: data.views } : p))
+          );
+          return data.views;
+        }
+      }
+    } catch (err) {
+      console.error('조회수 반영 실패:', err);
+    }
+
+    const current = posts.find((p) => p.id === id);
+    return current?.views || 0;
   };
 
   // 게시글 상세 조회 및 조회수/댓글수 동기화 (SQLite DB 실시간 반영)
@@ -801,6 +863,7 @@ export const PostProvider: React.FC<{ children: React.ReactNode }> = ({ children
         updatePost,
         toggleHidePost,
         getPost,
+        incrementPostView,
         deletePost,
         deleteUser,
         addComment,
