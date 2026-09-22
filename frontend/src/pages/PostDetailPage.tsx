@@ -1,6 +1,6 @@
 import React, { useState, useEffect, useRef } from 'react';
 import { useParams, useNavigate, Link } from 'react-router-dom';
-import { usePosts } from '../context/PostContext';
+import { usePosts, API_BASE } from '../context/PostContext';
 import type { Post, Comment } from '../types';
 
 export const PostDetailPage: React.FC = () => {
@@ -72,11 +72,11 @@ export const PostDetailPage: React.FC = () => {
     const authHeaders: Record<string, string> = token ? { Authorization: `Bearer ${token}` } : {};
 
     Promise.all([
-      fetch(`http://localhost:5000/api/posts/${postId}`, { headers: authHeaders }).then(async (res) => {
+      fetch(`${API_BASE}/posts/${postId}`, { headers: authHeaders }).then(async (res) => {
         if (res.ok) return await res.json();
         return null;
       }),
-      fetch(`http://localhost:5000/api/posts/${postId}/comments`, { headers: authHeaders }).then(async (res) => {
+      fetch(`${API_BASE}/posts/${postId}/comments`, { headers: authHeaders }).then(async (res) => {
         if (res.ok) return await res.json();
         return [];
       }),

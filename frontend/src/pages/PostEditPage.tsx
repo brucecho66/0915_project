@@ -1,6 +1,6 @@
 import React, { useState, useEffect } from 'react';
 import { useParams, useNavigate, Link } from 'react-router-dom';
-import { usePosts } from '../context/PostContext';
+import { usePosts, API_BASE } from '../context/PostContext';
 import type { Post } from '../types';
 
 export const PostEditPage: React.FC = () => {
@@ -19,7 +19,7 @@ export const PostEditPage: React.FC = () => {
     if (!id) return;
     const fetchPost = async () => {
       try {
-        const res = await fetch(`http://localhost:5000/api/posts/${id}`);
+        const res = await fetch(`${API_BASE}/posts/${id}`);
         if (res.ok) {
           const data: Post = await res.json();
           setPost(data);
