@@ -12,7 +12,12 @@ const __dirname = path.dirname(__filename);
 
 // Supabase 환경 변수 로드
 const supabaseUrl = process.env.SUPABASE_URL || '';
-const supabaseKey = process.env.SUPABASE_SERVICE_ROLE_KEY || process.env.SUPABASE_ANON_KEY || '';
+const supabaseKey =
+  process.env.SUPABASE_SERVICE_ROLE_KEY ||
+  process.env.SUPABSE_SERVICE_ROLE_KEY ||
+  process.env.SUPABASE_ANON_KEY ||
+  process.env.SUPABSE_ANON_KEY ||
+  '';
 
 if (!supabaseUrl || !supabaseKey || supabaseUrl.includes('your-project-ref')) {
   console.warn(
