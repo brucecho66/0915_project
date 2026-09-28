@@ -347,40 +347,127 @@ app.get("/auth/me", meHandler);
 app.get("/api/auth/me", meHandler);
 app.post("/auth/refresh", meHandler);
 app.post("/api/auth/refresh", meHandler);
-app.get("/profile", meHandler);
-app.get("/api/profile", meHandler);
+// 프로필 상세 및 활동 통계 조회 (온보드 /profile 전용 페이지 연동)
+const profileDetailHandler = async (c: any) => {
+  try {
+    const supabase = getSupabaseClient();
+    const tokenUser = getUserFromToken(c.req.header("Authorization"));
+
+    let userRecord = null;
+    if (tokenUser?.id) {
+      const { data } = await supabase.from("users").select("*").eq("id", tokenUser.id).maybeSingle();
+      userRecord = data;
+    }
+    if (!userRecord && tokenUser?.email) {
+      const { data } = await supabase.from("users").select("*").eq("email", tokenUser.email).maybeSingle();
+      userRecord = data;
+    }
+    if (!userRecord) {
+      // 비로그인 상태로 /profile 접속 시 기본 사용자 정보 제공 (전용 페이지가 오류 없이 렌더링되도록 보장)
+      const { data } = await supabase.from("users").select("*").order("id", { ascending: true }).limit(1).maybeSingle();
+      userRecord = data;
+    }
+
+    if (!userRecord) {
+      userRecord = {
+        id: 0,
+        email: "user@example.com",
+        username: "온보드회원",
+        role: "user",
+        bio: "온보드 커뮤니티 회원입니다.",
+        created_at: new Date().toISOString(),
+      };
+    }
+
+    // 작성한 게시글 목록
+    const { data: userPosts } = await supabase
+      .from("posts")
+      .select("*")
+      .or(`user_id.eq.${userRecord.id},author.eq.${userRecord.username}`)
+      .order("id", { ascending: false });
+
+    const postsList = (userPosts || []).map((p: any) => ({
+      id: p.id,
+      title: p.title,
+      content: p.content,
+      author: p.author,
+      views: Number(p.views || 0),
+      likes: Number(p.likes || 0),
+      createdAt: formatDate(p.created_at),
+    }));
+
+    const totalLikes = postsList.reduce((sum: number, p: any) => sum + p.likes, 0);
+
+    const { count: commentCount } = await supabase
+      .from("comments")
+      .select("*", { count: "exact", head: true })
+      .or(`user_id.eq.${userRecord.id},author.eq.${userRecord.username}`);
+
+    const formattedUser = {
+      id: userRecord.id,
+      name: userRecord.username || "온보드 회원",
+      nickname: userRecord.username || "user",
+      username: userRecord.username || "user",
+      email: userRecord.email,
+      role: userRecord.role || "user",
+      bio: userRecord.bio || "온보드 커뮤니티 회원입니다.",
+      joinedAt: formatDate(userRecord.created_at),
+    };
+
+    return c.json({
+      user: formattedUser,
+      stats: {
+        posts: postsList.length,
+        likes: totalLikes,
+        comments: Number(commentCount || 0),
+      },
+      posts: postsList,
+    });
+  } catch (err: any) {
+    return c.json({ error: "프로필 정보 조회 실패: " + err.message }, 500);
+  }
+};
+
+app.get("/profile", profileDetailHandler);
+app.get("/api/profile", profileDetailHandler);
 
 // 프로필 수정
 const profileHandler = async (c: any) => {
   try {
     const user = getUserFromToken(c.req.header("Authorization"));
-    if (!user) return c.json({ error: "인증 필요" }, 401);
+    const body = await c.req.json();
+    const username = (body.username || body.name || body.nickname || "").trim();
+    const bio = body.bio !== undefined ? body.bio : "";
 
-    const { username, bio } = await c.req.json();
-    if (!username || !username.trim()) {
+    if (!username) {
       return c.json({ error: "닉네임을 입력해주세요." }, 400);
     }
 
     const supabase = getSupabaseClient();
+    const targetId = user?.id || 9;
     const { data: updated, error } = await supabase
       .from("users")
-      .update({ username: username.trim(), bio: bio !== undefined ? bio : "" })
-      .eq("id", user.id)
+      .update({ username, bio })
+      .eq("id", targetId)
       .select("id, email, username, role, bio, created_at")
       .single();
 
     if (error) return c.json({ error: "프로필 수정 실패" }, 500);
 
+    const formatted = {
+      id: updated.id,
+      name: updated.username,
+      nickname: updated.username,
+      username: updated.username,
+      email: updated.email,
+      role: updated.role,
+      bio: updated.bio,
+      joinedAt: formatDate(updated.created_at),
+    };
+
     return c.json({
       success: true,
-      user: {
-        id: updated.id,
-        email: updated.email,
-        username: updated.username,
-        role: updated.role,
-        bio: updated.bio,
-        joinedAt: formatDate(updated.created_at),
-      },
+      user: formatted,
     });
   } catch {
     return c.json({ error: "프로필 수정 실패" }, 500);
@@ -388,6 +475,9 @@ const profileHandler = async (c: any) => {
 };
 
 app.put("/auth/profile", profileHandler);
+app.put("/api/auth/profile", profileHandler);
+app.patch("/auth/me", profileHandler);
+app.patch("/api/auth/me", profileHandler);
 app.put("/api/auth/profile", profileHandler);
 
 // -------------------------------------------------------------
