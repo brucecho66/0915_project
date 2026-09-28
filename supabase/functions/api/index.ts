@@ -132,6 +132,23 @@ const registerHandler = async (c: any) => {
       return c.json({ error: "회원가입 처리 중 오류가 발생했습니다." }, 500);
     }
 
+    // Supabase 대시보드 Authentication -> Users 유저페이지에도 즉시 등록되도록 Auth Admin API 동기화
+    try {
+      const authPassword = password.length >= 6 ? password : password + "123456";
+      await supabase.auth.admin.createUser({
+        email: trimmedEmail,
+        password: authPassword,
+        email_confirm: true,
+        user_metadata: {
+          username: trimmedUsername,
+          role: "user",
+          bio: "새로 가입한 회원입니다.",
+        },
+      });
+    } catch (authErr) {
+      console.warn("Supabase Auth 동기화 경고:", authErr);
+    }
+
     const formattedUser = {
       id: newUser.id,
       email: newUser.email,
@@ -948,6 +965,18 @@ const adminDeleteUserHandler = async (c: any) => {
     if (user.role === "admin") return c.json({ error: "최고 관리자 계정은 삭제할 수 없습니다." }, 400);
 
     await supabase.from("users").delete().eq("id", targetId);
+
+    // Supabase Auth 계정에서도 삭제 동기화
+    if (user.email) {
+      try {
+        const { data: authUsers } = await supabase.auth.admin.listUsers();
+        const found = authUsers?.users?.find((u: any) => u.email === user.email);
+        if (found) await supabase.auth.admin.deleteUser(found.id);
+      } catch (authDelErr) {
+        console.warn("Supabase Auth 유저 삭제 경고:", authDelErr);
+      }
+    }
+
     return c.json({ message: "회원 계정이 삭제되었습니다." });
   } catch {
     return c.json({ error: "회원 삭제 실패" }, 500);

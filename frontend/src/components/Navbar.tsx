@@ -104,12 +104,15 @@ export const Navbar: React.FC = () => {
                   🛡️ 관리자 계정 전환
                 </button>
               )}
-              <div className="user-greeting">
+              <Link to="/profile" className="user-greeting" title="마이페이지 / 내 정보 이동" style={{ textDecoration: 'none', color: 'inherit' }}>
                 <span className="avatar-mini">
                   <img src={profileImg} alt="프로필" />
                 </span>
                 <span><strong>{user.username}</strong> 님</span>
-              </div>
+              </Link>
+              <Link to="/profile" className="nav-profile-btn" style={{ padding: '0.35rem 0.75rem', borderRadius: '6px', background: '#f3f4f6', color: '#374151', textDecoration: 'none', fontSize: '0.875rem', fontWeight: 600 }} title="내 정보 및 내가 쓴 글 확인">
+                👤 내 정보
+              </Link>
               <button onClick={handleLogout} className="btn-logout">
                 로그아웃
               </button>

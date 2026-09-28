@@ -184,6 +184,23 @@ app.post('/api/auth/register', async (req, res) => {
       return res.status(500).json({ error: '회원가입 처리 중 오류가 발생했습니다.' });
     }
 
+    // Supabase 대시보드 Authentication -> Users 유저페이지에도 즉시 등록되도록 Auth Admin API 동기화
+    try {
+      const authPassword = password.length >= 6 ? password : password + '123456';
+      await supabase.auth.admin.createUser({
+        email: trimmedEmail,
+        password: authPassword,
+        email_confirm: true,
+        user_metadata: {
+          username: trimmedUsername,
+          role: 'user',
+          bio: '새로 가입한 회원입니다.',
+        },
+      });
+    } catch (authErr) {
+      console.warn('Supabase Auth 동기화 경고:', authErr?.message);
+    }
+
     const formattedUser = {
       id: newUser.id,
       email: newUser.email,
