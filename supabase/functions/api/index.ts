@@ -681,5 +681,360 @@ const commentCreateHandler = async (c: any) => {
 app.post("/posts/:id/comments", commentCreateHandler);
 app.post("/api/posts/:id/comments", commentCreateHandler);
 
+// 게시글 수정
+const postUpdateHandler = async (c: any) => {
+  try {
+    const postId = Number(c.req.param("id"));
+    const { title, content, author, requesterRole } = await c.req.json();
+    if (!title || !content) return c.json({ error: "제목과 내용을 입력해주세요." }, 400);
+
+    const supabase = getSupabaseClient();
+    const { data: existing } = await supabase.from("posts").select("*").eq("id", postId).maybeSingle();
+    if (!existing) return c.json({ error: "게시글을 찾을 수 없습니다." }, 404);
+
+    const tokenUser = getUserFromToken(c.req.header("Authorization"));
+    const isAdmin = requesterRole === "admin" || tokenUser?.role === "admin";
+    const isAuthor = (author && existing.author === author) || (tokenUser && tokenUser.username === existing.author);
+
+    if (author || requesterRole || tokenUser) {
+      if (!isAdmin && !isAuthor) {
+        return c.json({ error: "게시글 수정 권한이 없습니다." }, 403);
+      }
+    }
+
+    const { data: updated, error } = await supabase
+      .from("posts")
+      .update({ title: title.trim(), content: content.trim(), updated_at: new Date().toISOString() })
+      .eq("id", postId)
+      .select("*")
+      .single();
+
+    if (error) return c.json({ error: "게시글 수정 실패" }, 500);
+
+    return c.json({
+      success: true,
+      message: "게시글이 성공적으로 수정되었습니다.",
+      post: {
+        id: updated.id,
+        title: updated.title,
+        content: updated.content,
+        author: updated.author,
+        userId: updated.user_id,
+        views: Number(updated.views || 0),
+        likes: Number(updated.likes || 0),
+        dislikes: Number(updated.dislikes || 0),
+        isHidden: Boolean(updated.is_hidden),
+        createdAt: formatDate(updated.created_at),
+        updatedAt: formatDateTime(updated.updated_at),
+      },
+    });
+  } catch {
+    return c.json({ error: "게시글 수정 실패" }, 500);
+  }
+};
+app.put("/posts/:id", postUpdateHandler);
+app.put("/api/posts/:id", postUpdateHandler);
+
+// 게시글 숨김 토글
+const postToggleHideHandler = async (c: any) => {
+  try {
+    const postId = Number(c.req.param("id"));
+    const supabase = getSupabaseClient();
+    const { data: existing } = await supabase.from("posts").select("id, is_hidden").eq("id", postId).maybeSingle();
+    if (!existing) return c.json({ error: "게시글을 찾을 수 없습니다." }, 404);
+
+    const newHidden = !existing.is_hidden;
+    await supabase.from("posts").update({ is_hidden: newHidden, updated_at: new Date().toISOString() }).eq("id", postId);
+
+    return c.json({
+      success: true,
+      isHidden: newHidden,
+      message: newHidden ? "게시글이 숨김 처리되었습니다." : "게시글 숨김이 해제되었습니다.",
+    });
+  } catch {
+    return c.json({ error: "게시글 숨김 처리 실패" }, 500);
+  }
+};
+app.patch("/posts/:id/toggle-hide", postToggleHideHandler);
+app.patch("/api/posts/:id/toggle-hide", postToggleHideHandler);
+
+// 게시글 삭제
+const postDeleteHandler = async (c: any) => {
+  try {
+    const postId = Number(c.req.param("id"));
+    const supabase = getSupabaseClient();
+    await supabase.from("post_reactions").delete().eq("post_id", postId);
+    await supabase.from("comments").delete().eq("post_id", postId);
+    await supabase.from("posts").delete().eq("id", postId);
+
+    return c.json({ success: true, message: "게시글이 성공적으로 삭제되었습니다." });
+  } catch {
+    return c.json({ error: "게시글 삭제 실패" }, 500);
+  }
+};
+app.delete("/posts/:id", postDeleteHandler);
+app.delete("/api/posts/:id", postDeleteHandler);
+
+// 댓글 수정
+const commentUpdateHandler = async (c: any) => {
+  try {
+    const commentId = Number(c.req.param("id"));
+    const { content } = await c.req.json();
+    if (!content || !content.trim()) return c.json({ error: "내용을 입력해주세요." }, 400);
+
+    const supabase = getSupabaseClient();
+    const { data: updated, error } = await supabase
+      .from("comments")
+      .update({ content: content.trim(), updated_at: new Date().toISOString() })
+      .eq("id", commentId)
+      .select("*")
+      .single();
+
+    if (error) return c.json({ error: "댓글 수정 실패" }, 500);
+
+    return c.json({
+      success: true,
+      message: "댓글이 성공적으로 수정되었습니다.",
+      comment: {
+        id: updated.id,
+        postId: updated.post_id,
+        userId: updated.user_id,
+        author: updated.author,
+        content: updated.content,
+        isHidden: Boolean(updated.is_hidden),
+        createdAt: formatDateTime(updated.created_at),
+        updatedAt: formatDateTime(updated.updated_at),
+      },
+    });
+  } catch {
+    return c.json({ error: "댓글 수정 실패" }, 500);
+  }
+};
+app.put("/comments/:id", commentUpdateHandler);
+app.put("/api/comments/:id", commentUpdateHandler);
+
+// 댓글 삭제
+const commentDeleteHandler = async (c: any) => {
+  try {
+    const commentId = Number(c.req.param("id"));
+    const supabase = getSupabaseClient();
+    const { data: existing } = await supabase.from("comments").select("id, post_id").eq("id", commentId).maybeSingle();
+    if (!existing) return c.json({ error: "삭제할 댓글을 찾을 수 없습니다." }, 404);
+
+    await supabase.from("comments").delete().eq("id", commentId);
+    return c.json({ success: true, message: "댓글이 성공적으로 삭제되었습니다.", postId: existing.post_id });
+  } catch {
+    return c.json({ error: "댓글 삭제 실패" }, 500);
+  }
+};
+app.delete("/comments/:id", commentDeleteHandler);
+app.delete("/api/comments/:id", commentDeleteHandler);
+
+// 댓글 숨김 토글
+const commentToggleHideHandler = async (c: any) => {
+  try {
+    const commentId = Number(c.req.param("id"));
+    const supabase = getSupabaseClient();
+    const { data: existing } = await supabase.from("comments").select("id, is_hidden").eq("id", commentId).maybeSingle();
+    if (!existing) return c.json({ error: "댓글을 찾을 수 없습니다." }, 404);
+
+    const newHidden = !existing.is_hidden;
+    await supabase.from("comments").update({ is_hidden: newHidden, updated_at: new Date().toISOString() }).eq("id", commentId);
+
+    return c.json({
+      success: true,
+      isHidden: newHidden,
+      message: newHidden ? "댓글이 숨김 처리되었습니다." : "댓글 숨김이 해제되었습니다.",
+    });
+  } catch {
+    return c.json({ error: "댓글 숨김 토글 실패" }, 500);
+  }
+};
+app.patch("/comments/:id/toggle-hide", commentToggleHideHandler);
+app.patch("/api/comments/:id/toggle-hide", commentToggleHideHandler);
+
+// 관리자 로그인
+const adminLoginHandler = async (c: any) => {
+  try {
+    const { email, password } = await c.req.json();
+    const supabase = getSupabaseClient();
+    const { data: user } = await supabase
+      .from("users")
+      .select("*")
+      .eq("email", (email || "").trim().toLowerCase())
+      .eq("role", "admin")
+      .maybeSingle();
+
+    if (!user) return c.json({ error: "존재하지 않는 관리자 계정입니다." }, 401);
+
+    const isMatch = user.password.startsWith("$2") ? bcrypt.compareSync(password, user.password) : user.password === password;
+    if (!isMatch) return c.json({ error: "비밀번호가 일치하지 않습니다." }, 401);
+
+    const token = jwt.sign(
+      { id: user.id, email: user.email, username: user.username, role: user.role },
+      JWT_SECRET,
+      { expiresIn: SESSION_EXPIRY }
+    );
+
+    const { password: _, ...adminData } = user;
+    return c.json({
+      success: true,
+      message: "관리자 인증 성공",
+      admin: { ...adminData, joinedAt: formatDate(user.created_at) },
+      token,
+    });
+  } catch {
+    return c.json({ error: "관리자 로그인 실패" }, 500);
+  }
+};
+app.post("/admin/login", adminLoginHandler);
+app.post("/api/admin/login", adminLoginHandler);
+
+// 관리자 통계
+const adminStatsHandler = async (c: any) => {
+  try {
+    const supabase = getSupabaseClient();
+    const [{ count: totalUsers }, { count: totalPosts }, { count: totalComments }] = await Promise.all([
+      supabase.from("users").select("*", { count: "exact", head: true }),
+      supabase.from("posts").select("*", { count: "exact", head: true }),
+      supabase.from("comments").select("*", { count: "exact", head: true }),
+    ]);
+
+    const { data: viewsData } = await supabase.from("posts").select("views");
+    const totalViews = (viewsData || []).reduce((sum: number, p: any) => sum + Number(p.views || 0), 0);
+
+    const { data: recentPostsRaw } = await supabase.from("posts").select("id, title, author, views, likes, created_at").order("id", { ascending: false }).limit(5);
+    const recentPosts = (recentPostsRaw || []).map((p: any) => ({ ...p, createdAt: formatDate(p.created_at) }));
+
+    const { data: recentUsersRaw } = await supabase.from("users").select("id, email, username, role, created_at").order("id", { ascending: false }).limit(5);
+    const recentUsers = (recentUsersRaw || []).map((u: any) => ({ ...u, joinedAt: formatDate(u.created_at) }));
+
+    return c.json({
+      totalUsers: totalUsers || 0,
+      totalPosts: totalPosts || 0,
+      totalComments: totalComments || 0,
+      totalViews,
+      recentPosts,
+      recentUsers,
+    });
+  } catch {
+    return c.json({ error: "통계 조회 실패" }, 500);
+  }
+};
+app.get("/admin/stats", adminStatsHandler);
+app.get("/api/admin/stats", adminStatsHandler);
+
+// 관리자 회원 목록
+const adminUsersHandler = async (c: any) => {
+  try {
+    const supabase = getSupabaseClient();
+    const { data: users, error } = await supabase.from("users").select("id, email, username, role, bio, created_at").order("id", { ascending: false });
+    if (error) return c.json({ error: "회원 목록 조회 실패" }, 500);
+    return c.json((users || []).map((u: any) => ({ ...u, joinedAt: formatDate(u.created_at) })));
+  } catch {
+    return c.json({ error: "회원 목록 조회 실패" }, 500);
+  }
+};
+app.get("/admin/users", adminUsersHandler);
+app.get("/api/admin/users", adminUsersHandler);
+
+// 관리자 회원 삭제
+const adminDeleteUserHandler = async (c: any) => {
+  try {
+    const targetId = Number(c.req.param("id"));
+    const supabase = getSupabaseClient();
+    const { data: user } = await supabase.from("users").select("role").eq("id", targetId).maybeSingle();
+    if (!user) return c.json({ error: "회원을 찾을 수 없습니다." }, 404);
+    if (user.role === "admin") return c.json({ error: "최고 관리자 계정은 삭제할 수 없습니다." }, 400);
+
+    await supabase.from("users").delete().eq("id", targetId);
+    return c.json({ message: "회원 계정이 삭제되었습니다." });
+  } catch {
+    return c.json({ error: "회원 삭제 실패" }, 500);
+  }
+};
+app.delete("/admin/users/:id", adminDeleteUserHandler);
+app.delete("/api/admin/users/:id", adminDeleteUserHandler);
+
+// 관리자 댓글 목록
+const adminCommentsHandler = async (c: any) => {
+  try {
+    const supabase = getSupabaseClient();
+    const { data: comments, error } = await supabase.from("comments").select("*").order("id", { ascending: false });
+    if (error) return c.json({ error: "댓글 목록 조회 실패" }, 500);
+
+    const postIds = Array.from(new Set((comments || []).map((c: any) => c.post_id)));
+    const titleMap: Record<number, string> = {};
+    if (postIds.length > 0) {
+      const { data: posts } = await supabase.from("posts").select("id, title").in("id", postIds);
+      if (posts) posts.forEach((p: any) => { titleMap[p.id] = p.title; });
+    }
+
+    return c.json((comments || []).map((comm: any) => ({
+      id: comm.id,
+      postId: comm.post_id,
+      userId: comm.user_id,
+      author: comm.author,
+      content: comm.content,
+      isHidden: Boolean(comm.is_hidden),
+      createdAt: formatDateTime(comm.created_at),
+      updatedAt: formatDateTime(comm.updated_at),
+      postTitle: titleMap[comm.post_id] || "삭제된 게시글",
+    })));
+  } catch {
+    return c.json({ error: "댓글 목록 조회 실패" }, 500);
+  }
+};
+app.get("/admin/comments", adminCommentsHandler);
+app.get("/api/admin/comments", adminCommentsHandler);
+
+// 관리자 계정으로 전환
+const switchToAdminHandler = async (c: any) => {
+  try {
+    const supabase = getSupabaseClient();
+    const { data: admin } = await supabase.from("users").select("*").eq("role", "admin").order("id", { ascending: true }).limit(1).maybeSingle();
+    if (!admin) return c.json({ error: "관리자 계정을 찾을 수 없습니다." }, 404);
+
+    const token = jwt.sign(
+      { id: admin.id, email: admin.email, username: admin.username, role: "admin" },
+      JWT_SECRET,
+      { expiresIn: SESSION_EXPIRY }
+    );
+    const { password: _, ...adminData } = admin;
+    const formatted = { ...adminData, joinedAt: formatDate(admin.created_at) };
+    return c.json({ success: true, message: "관리자 계정으로 전환되었습니다.", admin: formatted, user: formatted, token });
+  } catch {
+    return c.json({ error: "관리자 전환 실패" }, 500);
+  }
+};
+app.post("/auth/switch-to-admin", switchToAdminHandler);
+app.post("/api/auth/switch-to-admin", switchToAdminHandler);
+
+// 일반 유저 계정으로 전환
+const switchToUserHandler = async (c: any) => {
+  try {
+    const supabase = getSupabaseClient();
+    let { data: user } = await supabase.from("users").select("*").eq("email", "user@example.com").maybeSingle();
+    if (!user) {
+      const { data: firstUser } = await supabase.from("users").select("*").eq("role", "user").order("id", { ascending: true }).limit(1).maybeSingle();
+      user = firstUser;
+    }
+    if (!user) return c.json({ error: "일반 테스트 계정을 찾을 수 없습니다." }, 404);
+
+    const token = jwt.sign(
+      { id: user.id, email: user.email, username: user.username, role: user.role },
+      JWT_SECRET,
+      { expiresIn: SESSION_EXPIRY }
+    );
+    const { password: _, ...userData } = user;
+    const formatted = { ...userData, joinedAt: formatDate(user.created_at) };
+    return c.json({ success: true, message: "일반 회원 계정으로 전환되었습니다.", user: formatted, token });
+  } catch {
+    return c.json({ error: "일반 계정 전환 실패" }, 500);
+  }
+};
+app.post("/auth/switch-to-user", switchToUserHandler);
+app.post("/api/auth/switch-to-user", switchToUserHandler);
+
 // Deno.serve 진입점
 export default app;

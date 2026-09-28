@@ -1,6 +1,6 @@
 import React, { useState } from 'react';
 import { useNavigate, Link } from 'react-router-dom';
-import { usePosts } from '../../context/PostContext';
+import { usePosts, API_BASE } from '../../context/PostContext';
 
 export const AdminLoginPage: React.FC = () => {
   const [email, setEmail] = useState('');
@@ -12,7 +12,7 @@ export const AdminLoginPage: React.FC = () => {
   const navigate = useNavigate();
 
   React.useEffect(() => {
-    fetch('http://localhost:5000/api/auth/admin-info')
+    fetch(`${API_BASE}/auth/admin-info`)
       .then((res) => res.json())
       .then((data) => {
         if (data.success && data.email) {

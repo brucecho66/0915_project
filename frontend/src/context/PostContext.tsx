@@ -50,9 +50,14 @@ interface PostContextType {
   switchToUser: () => Promise<{ success: boolean; message?: string }>;
 }
 
-const PostContext = createContext<PostContextType | undefined>(undefined);
+const DEFAULT_API =
+  typeof window !== 'undefined' && window.location.hostname !== 'localhost'
+    ? 'https://wfvmnouudayelbbomgzs.supabase.co/functions/v1/api'
+    : 'http://localhost:5000/api';
 
-export const API_BASE = (import.meta as any).env?.VITE_API_URL || 'http://localhost:5000/api';
+export const API_BASE = (import.meta as any).env?.VITE_API_URL || DEFAULT_API;
+
+const PostContext = createContext<PostContextType | undefined>(undefined);
 
 export const PostProvider: React.FC<{ children: React.ReactNode }> = ({ children }) => {
   const [posts, setPosts] = useState<Post[]>([]);
