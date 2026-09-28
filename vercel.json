@@ -4,6 +4,10 @@
   "framework": "vite",
   "rewrites": [
     {
+      "source": "/posts/:path*",
+      "destination": "/board"
+    },
+    {
       "source": "/(.*)",
       "destination": "/index.html"
     }

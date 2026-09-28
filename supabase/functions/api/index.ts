@@ -175,6 +175,8 @@ const registerHandler = async (c: any) => {
 
 app.post("/auth/register", registerHandler);
 app.post("/api/auth/register", registerHandler);
+app.post("/auth/signup", registerHandler);
+app.post("/api/auth/signup", registerHandler);
 
 // 관리자 기본 정보 조회
 const adminInfoHandler = async (c: any) => {
@@ -343,6 +345,10 @@ const meHandler = async (c: any) => {
 
 app.get("/auth/me", meHandler);
 app.get("/api/auth/me", meHandler);
+app.post("/auth/refresh", meHandler);
+app.post("/api/auth/refresh", meHandler);
+app.get("/profile", meHandler);
+app.get("/api/profile", meHandler);
 
 // 프로필 수정
 const profileHandler = async (c: any) => {
@@ -591,6 +597,8 @@ const postReactHandler = async (c: any) => {
 
 app.post("/posts/:id/react", postReactHandler);
 app.post("/api/posts/:id/react", postReactHandler);
+app.post("/posts/:id/reaction", postReactHandler);
+app.post("/api/posts/:id/reaction", postReactHandler);
 
 // 새 게시글 등록
 const postCreateHandler = async (c: any) => {
@@ -825,6 +833,8 @@ const postToggleHideHandler = async (c: any) => {
 };
 app.patch("/posts/:id/toggle-hide", postToggleHideHandler);
 app.patch("/api/posts/:id/toggle-hide", postToggleHideHandler);
+app.patch("/admin/posts/:id/visibility", postToggleHideHandler);
+app.patch("/api/admin/posts/:id/visibility", postToggleHideHandler);
 
 // 게시글 삭제
 const postDeleteHandler = async (c: any) => {
@@ -897,6 +907,8 @@ const commentDeleteHandler = async (c: any) => {
 };
 app.delete("/comments/:id", commentDeleteHandler);
 app.delete("/api/comments/:id", commentDeleteHandler);
+app.delete("/posts/comments/:id", commentDeleteHandler);
+app.delete("/api/posts/comments/:id", commentDeleteHandler);
 
 // 댓글 숨김 토글
 const commentToggleHideHandler = async (c: any) => {
@@ -920,6 +932,8 @@ const commentToggleHideHandler = async (c: any) => {
 };
 app.patch("/comments/:id/toggle-hide", commentToggleHideHandler);
 app.patch("/api/comments/:id/toggle-hide", commentToggleHideHandler);
+app.patch("/admin/comments/:id/visibility", commentToggleHideHandler);
+app.patch("/api/admin/comments/:id/visibility", commentToggleHideHandler);
 
 // 관리자 로그인
 const adminLoginHandler = async (c: any) => {
@@ -991,6 +1005,8 @@ const adminStatsHandler = async (c: any) => {
 };
 app.get("/admin/stats", adminStatsHandler);
 app.get("/api/admin/stats", adminStatsHandler);
+app.get("/admin/dashboard", adminStatsHandler);
+app.get("/api/admin/dashboard", adminStatsHandler);
 
 // 관리자 회원 목록
 const adminUsersHandler = async (c: any) => {
