@@ -1203,6 +1203,9 @@ const adminStatsHandler = async (c: any) => {
     const recentUsers = (recentUsersRaw || []).map((u: any) => ({ ...u, joinedAt: formatDate(u.created_at) }));
 
     return c.json({
+      users: totalUsers || 0,
+      posts: totalPosts || 0,
+      comments: totalComments || 0,
       totalUsers: totalUsers || 0,
       totalPosts: totalPosts || 0,
       totalComments: totalComments || 0,
@@ -1219,13 +1222,68 @@ app.get("/api/admin/stats", adminStatsHandler);
 app.get("/admin/dashboard", adminStatsHandler);
 app.get("/api/admin/dashboard", adminStatsHandler);
 
+// 관리자 게시글 목록
+const adminPostsHandler = async (c: any) => {
+  try {
+    const supabase = getSupabaseClient();
+    const search = c.req.query("search");
+
+    let query = supabase.from("posts").select("*").order("id", { ascending: false });
+    if (search && search.trim()) {
+      query = query.or(`title.ilike.%${search.trim()}%,content.ilike.%${search.trim()}%,author.ilike.%${search.trim()}%`);
+    }
+
+    const { data: posts, error } = await query;
+    if (error) return c.json({ error: "게시글 목록 조회 실패" }, 500);
+
+    const userIds = Array.from(new Set((posts || []).map((p: any) => p.user_id).filter(Boolean)));
+    const emailMap: Record<number, string> = {};
+    if (userIds.length > 0) {
+      const { data: users } = await supabase.from("users").select("id, email").in("id", userIds);
+      if (users) users.forEach((u: any) => { emailMap[u.id] = u.email; });
+    }
+
+    const formatted = (posts || []).map((p: any) => ({
+      id: p.id,
+      title: p.title,
+      content: p.content,
+      author: p.author,
+      email: emailMap[p.user_id] || "user@community.local",
+      category: p.category || "일상",
+      views: Number(p.views || 0),
+      likes: Number(p.likes || 0),
+      dislikes: Number(p.dislikes || 0),
+      is_hidden: Boolean(p.is_hidden),
+      isHidden: Boolean(p.is_hidden),
+      date: p.created_at,
+      created_at: formatDate(p.created_at),
+      createdAt: formatDate(p.created_at),
+      updatedAt: formatDateTime(p.updated_at),
+    }));
+
+    return c.json({
+      posts: formatted,
+    });
+  } catch (err: any) {
+    return c.json({ error: "게시글 목록 조회 실패: " + err.message }, 500);
+  }
+};
+app.get("/admin/posts", adminPostsHandler);
+app.get("/api/admin/posts", adminPostsHandler);
+
 // 관리자 회원 목록
 const adminUsersHandler = async (c: any) => {
   try {
     const supabase = getSupabaseClient();
     const { data: users, error } = await supabase.from("users").select("id, email, username, role, bio, created_at").order("id", { ascending: false });
     if (error) return c.json({ error: "회원 목록 조회 실패" }, 500);
-    return c.json((users || []).map((u: any) => ({ ...u, joinedAt: formatDate(u.created_at) })));
+    const formatted = (users || []).map((u: any) => ({
+      ...u,
+      name: u.username,
+      nickname: u.username,
+      joinedAt: formatDate(u.created_at),
+    }));
+    return c.json({ users: formatted });
   } catch {
     return c.json({ error: "회원 목록 조회 실패" }, 500);
   }
@@ -1238,7 +1296,7 @@ const adminDeleteUserHandler = async (c: any) => {
   try {
     const targetId = Number(c.req.param("id"));
     const supabase = getSupabaseClient();
-    const { data: user } = await supabase.from("users").select("role").eq("id", targetId).maybeSingle();
+    const { data: user } = await supabase.from("users").select("role, email").eq("id", targetId).maybeSingle();
     if (!user) return c.json({ error: "회원을 찾을 수 없습니다." }, 404);
     if (user.role === "admin") return c.json({ error: "최고 관리자 계정은 삭제할 수 없습니다." }, 400);
 
@@ -1267,7 +1325,12 @@ app.delete("/api/admin/users/:id", adminDeleteUserHandler);
 const adminCommentsHandler = async (c: any) => {
   try {
     const supabase = getSupabaseClient();
-    const { data: comments, error } = await supabase.from("comments").select("*").order("id", { ascending: false });
+    const search = c.req.query("search");
+    let query = supabase.from("comments").select("*").order("id", { ascending: false });
+    if (search && search.trim()) {
+      query = query.or(`content.ilike.%${search.trim()}%,author.ilike.%${search.trim()}%`);
+    }
+    const { data: comments, error } = await query;
     if (error) return c.json({ error: "댓글 목록 조회 실패" }, 500);
 
     const postIds = Array.from(new Set((comments || []).map((c: any) => c.post_id)));
@@ -1277,17 +1340,22 @@ const adminCommentsHandler = async (c: any) => {
       if (posts) posts.forEach((p: any) => { titleMap[p.id] = p.title; });
     }
 
-    return c.json((comments || []).map((comm: any) => ({
+    const formatted = (comments || []).map((comm: any) => ({
       id: comm.id,
       postId: comm.post_id,
       userId: comm.user_id,
       author: comm.author,
       content: comm.content,
+      is_hidden: Boolean(comm.is_hidden),
       isHidden: Boolean(comm.is_hidden),
+      date: comm.created_at,
+      created_at: formatDateTime(comm.created_at),
       createdAt: formatDateTime(comm.created_at),
       updatedAt: formatDateTime(comm.updated_at),
       postTitle: titleMap[comm.post_id] || "삭제된 게시글",
-    })));
+    }));
+
+    return c.json({ comments: formatted });
   } catch {
     return c.json({ error: "댓글 목록 조회 실패" }, 500);
   }
@@ -1308,8 +1376,20 @@ const switchToAdminHandler = async (c: any) => {
       { expiresIn: SESSION_EXPIRY }
     );
     const { password: _, ...adminData } = admin;
-    const formatted = { ...adminData, joinedAt: formatDate(admin.created_at) };
-    return c.json({ success: true, message: "관리자 계정으로 전환되었습니다.", admin: formatted, user: formatted, token });
+    const formatted = {
+      ...adminData,
+      name: admin.username,
+      nickname: admin.username,
+      joinedAt: formatDate(admin.created_at)
+    };
+    return c.json({
+      success: true,
+      message: "관리자 계정으로 전환되었습니다.",
+      admin: formatted,
+      user: formatted,
+      token,
+      refreshToken: token
+    });
   } catch {
     return c.json({ error: "관리자 전환 실패" }, 500);
   }
