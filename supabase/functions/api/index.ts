@@ -599,13 +599,17 @@ const postCreateHandler = async (c: any) => {
     if (!title || !content) return c.json({ error: "제목과 내용을 입력해주세요." }, 400);
 
     const supabase = getSupabaseClient();
+    const tokenUser = getUserFromToken(c.req.header("Authorization"));
+    const finalAuthor = (author || tokenUser?.username || "익명").trim();
+    const finalUserId = userId ? Number(userId) : (tokenUser?.id ? Number(tokenUser.id) : null);
+
     const { data: createdPost, error } = await supabase
       .from("posts")
       .insert({
         title: title.trim(),
         content: content.trim(),
-        author: author?.trim() || "익명",
-        user_id: userId ? Number(userId) : null,
+        author: finalAuthor,
+        user_id: finalUserId,
         views: 0,
         likes: 0,
         dislikes: 0,
