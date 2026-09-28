@@ -150,55 +150,47 @@ app.post('/api/auth/register', async (req, res) => {
     const trimmedEmail = email.trim().toLowerCase();
     const trimmedUsername = username.trim();
 
-    // 이메일 중복 체크
-    const { data: existing, error: findError } = await supabase
-      .from('users')
-      .select('id')
-      .eq('email', trimmedEmail)
-      .maybeSingle();
+    // [1단계: Supabase Auth 권한 회원가입 처리]
+    // Supabase 대시보드 [권한(Authentication) -> 유저목록(Users)]에 공식 계정 생성
+    const { data: authUser, error: authError } = await supabase.auth.admin.createUser({
+      email: trimmedEmail,
+      password: password,
+      email_confirm: true,
+      user_metadata: {
+        username: trimmedUsername,
+        role: 'user',
+        bio: '새로 가입한 회원입니다.',
+      },
+    });
 
-    if (findError && findError.code !== 'PGRST116') {
-      console.error('회원가입 이메일 조회 실패:', findError);
-      return res.status(500).json({ error: '데이터베이스 조회 중 오류가 발생했습니다.' });
+    if (authError) {
+      const errMsg = (authError.message || '').toLowerCase();
+      if (errMsg.includes('already') || errMsg.includes('registered') || errMsg.includes('exists')) {
+        return res.status(400).json({ error: '이미 등록된 이메일 계정입니다.' });
+      }
+      return res.status(400).json({ error: `Supabase 권한 회원가입 오류: ${authError.message}` });
     }
 
-    if (existing) {
-      return res.status(400).json({ error: '이미 등록된 이메일 계정입니다.' });
-    }
-
+    // [2단계: Supabase 데이터베이스(public.users) 동기화]
     const hashedPassword = bcrypt.hashSync(password, BCRYPT_SALT_ROUNDS);
     const { data: newUser, error: insertError } = await supabase
       .from('users')
-      .insert({
+      .upsert({
         email: trimmedEmail,
         username: trimmedUsername,
         password: hashedPassword,
         role: 'user',
         bio: '새로 가입한 회원입니다.',
-      })
+      }, { onConflict: 'email' })
       .select('id, email, username, role, bio, created_at')
       .single();
 
     if (insertError) {
-      console.error('회원가입 등록 실패:', insertError);
-      return res.status(500).json({ error: '회원가입 처리 중 오류가 발생했습니다.' });
-    }
-
-    // Supabase 대시보드 Authentication -> Users 유저페이지에도 즉시 등록되도록 Auth Admin API 동기화
-    try {
-      const authPassword = password.length >= 6 ? password : password + '123456';
-      await supabase.auth.admin.createUser({
-        email: trimmedEmail,
-        password: authPassword,
-        email_confirm: true,
-        user_metadata: {
-          username: trimmedUsername,
-          role: 'user',
-          bio: '새로 가입한 회원입니다.',
-        },
-      });
-    } catch (authErr) {
-      console.warn('Supabase Auth 동기화 경고:', authErr?.message);
+      console.error('데이터베이스 회원 등록 실패:', insertError);
+      if (authUser?.user?.id) {
+        await supabase.auth.admin.deleteUser(authUser.user.id);
+      }
+      return res.status(500).json({ error: '데이터베이스 회원 정보 저장 중 오류가 발생했습니다.' });
     }
 
     const formattedUser = {

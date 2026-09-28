@@ -93,7 +93,7 @@ app.get("/api/health", healthHandler);
 // [1. 회원 인증 API]
 // -------------------------------------------------------------
 
-// 회원가입
+// 회원가입 (Supabase Auth 기반 회원가입 처리)
 const registerHandler = async (c: any) => {
   try {
     const supabase = getSupabaseClient();
@@ -102,51 +102,54 @@ const registerHandler = async (c: any) => {
       return c.json({ error: "이메일, 닉네임, 비밀번호를 모두 입력해주세요." }, 400);
     }
 
+    if (password.length < 6) {
+      return c.json({ error: "비밀번호는 최소 6자 이상이어야 합니다." }, 400);
+    }
+
     const trimmedEmail = email.trim().toLowerCase();
     const trimmedUsername = username.trim();
 
-    const { data: existing } = await supabase
-      .from("users")
-      .select("id")
-      .eq("email", trimmedEmail)
-      .maybeSingle();
+    // [1단계: Supabase Auth 권한 회원가입 처리]
+    // Supabase 대시보드 [권한(Authentication) -> 유저목록(Users)]에 공식 계정 생성
+    const { data: authUser, error: authError } = await supabase.auth.admin.createUser({
+      email: trimmedEmail,
+      password: password,
+      email_confirm: true,
+      user_metadata: {
+        username: trimmedUsername,
+        role: "user",
+        bio: "새로 가입한 회원입니다.",
+      },
+    });
 
-    if (existing) {
-      return c.json({ error: "이미 등록된 이메일 계정입니다." }, 400);
+    if (authError) {
+      const errMsg = (authError.message || "").toLowerCase();
+      if (errMsg.includes("already") || errMsg.includes("registered") || errMsg.includes("exists")) {
+        return c.json({ error: "이미 등록된 이메일 계정입니다." }, 400);
+      }
+      return c.json({ error: `Supabase 권한 회원가입 오류: ${authError.message}` }, 400);
     }
 
+    // [2단계: Supabase 데이터베이스(public.users) 동기화]
     const hashedPassword = bcrypt.hashSync(password, 10);
     const { data: newUser, error: insertError } = await supabase
       .from("users")
-      .insert({
+      .upsert({
         email: trimmedEmail,
         username: trimmedUsername,
         password: hashedPassword,
         role: "user",
         bio: "새로 가입한 회원입니다.",
-      })
+      }, { onConflict: "email" })
       .select("id, email, username, role, bio, created_at")
       .single();
 
     if (insertError) {
-      return c.json({ error: "회원가입 처리 중 오류가 발생했습니다." }, 500);
-    }
-
-    // Supabase 대시보드 Authentication -> Users 유저페이지에도 즉시 등록되도록 Auth Admin API 동기화
-    try {
-      const authPassword = password.length >= 6 ? password : password + "123456";
-      await supabase.auth.admin.createUser({
-        email: trimmedEmail,
-        password: authPassword,
-        email_confirm: true,
-        user_metadata: {
-          username: trimmedUsername,
-          role: "user",
-          bio: "새로 가입한 회원입니다.",
-        },
-      });
-    } catch (authErr) {
-      console.warn("Supabase Auth 동기화 경고:", authErr);
+      // DB 저장 실패 시 생성된 Auth 유저 롤백
+      if (authUser?.user?.id) {
+        await supabase.auth.admin.deleteUser(authUser.user.id);
+      }
+      return c.json({ error: "데이터베이스 회원 정보 저장 중 오류가 발생했습니다." }, 500);
     }
 
     const formattedUser = {
@@ -202,7 +205,7 @@ const adminInfoHandler = async (c: any) => {
 app.get("/auth/admin-info", adminInfoHandler);
 app.get("/api/auth/admin-info", adminInfoHandler);
 
-// 로그인
+// 로그인 (Supabase Auth 및 DB 통합 인증)
 const loginHandler = async (c: any) => {
   try {
     const supabase = getSupabaseClient();
@@ -212,27 +215,66 @@ const loginHandler = async (c: any) => {
     }
 
     const trimmedEmail = email.trim().toLowerCase();
-    const { data: user } = await supabase
+
+    // 1. Supabase Auth 권한 인증 시도
+    const { data: authSignIn } = await supabase.auth.signInWithPassword({
+      email: trimmedEmail,
+      password: password,
+    });
+
+    // 2. DB 사용자 정보 조회
+    let { data: user } = await supabase
       .from("users")
       .select("*")
       .eq("email", trimmedEmail)
       .maybeSingle();
 
-    if (!user) {
-      return c.json({ error: "가입되지 않은 이메일 주소입니다." }, 401);
-    }
+    if (authSignIn?.user) {
+      // Supabase Auth 인증 성공
+      if (!user) {
+        // DB에 없으면 자동 동기화 생성
+        const { data: createdUser } = await supabase
+          .from("users")
+          .insert({
+            email: trimmedEmail,
+            username: authSignIn.user.user_metadata?.username || trimmedEmail.split("@")[0],
+            password: bcrypt.hashSync(password, 10),
+            role: authSignIn.user.user_metadata?.role || "user",
+            bio: authSignIn.user.user_metadata?.bio || "",
+          })
+          .select()
+          .single();
+        user = createdUser;
+      }
+    } else {
+      // Supabase Auth에 없거나 비밀번호가 다른 경우, DB의 bcrypt 해시 검증
+      if (!user) {
+        return c.json({ error: "가입되지 않은 이메일 주소입니다." }, 401);
+      }
 
-    const isPasswordValid = user.password.startsWith("$2")
-      ? bcrypt.compareSync(password, user.password)
-      : user.password === password;
+      const isPasswordValid = user.password.startsWith("$2")
+        ? bcrypt.compareSync(password, user.password)
+        : user.password === password;
 
-    if (!isPasswordValid) {
-      return c.json({ error: "비밀번호가 일치하지 않습니다." }, 401);
-    }
+      if (!isPasswordValid) {
+        return c.json({ error: "비밀번호가 일치하지 않습니다." }, 401);
+      }
 
-    if (!user.password.startsWith("$2")) {
-      const hashed = bcrypt.hashSync(password, 10);
-      await supabase.from("users").update({ password: hashed }).eq("id", user.id);
+      // DB 검증 성공 시, Supabase Auth 권한 유저로 자동 승격 생성
+      try {
+        await supabase.auth.admin.createUser({
+          email: trimmedEmail,
+          password: password.length >= 6 ? password : password + "123456",
+          email_confirm: true,
+          user_metadata: {
+            username: user.username,
+            role: user.role,
+            bio: user.bio,
+          },
+        });
+      } catch (authCreateErr) {
+        console.warn("Supabase Auth 동기화 오류:", authCreateErr);
+      }
     }
 
     const userData = {
@@ -245,14 +287,19 @@ const loginHandler = async (c: any) => {
     };
 
     const token = jwt.sign(
-      { id: user.id, email: user.email, username: user.username, role: user.role },
+      { id: userData.id, email: userData.email, username: userData.username, role: userData.role },
       JWT_SECRET,
       { expiresIn: SESSION_EXPIRY }
     );
 
-    return c.json({ success: true, user: userData, token });
+    return c.json({
+      success: true,
+      message: "로그인 성공",
+      user: userData,
+      token,
+    });
   } catch (err: any) {
-    return c.json({ error: err.message || "로그인 처리 중 오류 발생" }, 500);
+    return c.json({ error: err.message || "로그인 처리 실패" }, 500);
   }
 };
 
