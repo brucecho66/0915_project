@@ -1,0 +1,685 @@
+// =========================================================
+// Supabase Edge Function - 0915 Community Board Backend API
+// (Deno + Hono + Supabase Client)
+// =========================================================
+
+import { Hono } from "npm:hono";
+import { cors } from "npm:hono/cors";
+import { createClient } from "npm:@supabase/supabase-js@2";
+import bcrypt from "npm:bcryptjs";
+import jwt from "npm:jsonwebtoken";
+
+const app = new Hono();
+
+// CORS 설정
+app.use(
+  "*",
+  cors({
+    origin: "*",
+    allowHeaders: ["Content-Type", "Authorization", "apikey", "x-client-info"],
+    allowMethods: ["GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"],
+    exposeHeaders: ["Content-Length"],
+    maxAge: 600,
+    credentials: true,
+  })
+);
+
+// Supabase 클라이언트 생성 헬퍼
+function getSupabaseClient() {
+  const url = Deno.env.get("SUPABASE_URL") || "";
+  const serviceKey =
+    Deno.env.get("SUPABASE_SERVICE_ROLE_KEY") ||
+    Deno.env.get("SUPABSE_SERVICE_ROLE_KEY") ||
+    Deno.env.get("SUPABASE_ANON_KEY") ||
+    "";
+
+  return createClient(url, serviceKey, {
+    auth: {
+      persistSession: false,
+      autoRefreshToken: false,
+    },
+  });
+}
+
+const JWT_SECRET =
+  Deno.env.get("JWT_SECRET") ||
+  "super_secret_jwt_key_2026_community_admin_secure!";
+const SESSION_EXPIRY = Deno.env.get("SESSION_EXPIRY") || "24h";
+
+// 날짜 포맷팅 헬퍼
+const formatDate = (isoString?: string | null) => {
+  if (!isoString) return "";
+  const d = new Date(isoString);
+  if (isNaN(d.getTime())) return String(isoString);
+  const pad = (n: number) => String(n).padStart(2, "0");
+  return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}`;
+};
+
+const formatDateTime = (isoString?: string | null) => {
+  if (!isoString) return "";
+  const d = new Date(isoString);
+  if (isNaN(d.getTime())) return String(isoString);
+  const pad = (n: number) => String(n).padStart(2, "0");
+  return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())} ${pad(d.getHours())}:${pad(d.getMinutes())}`;
+};
+
+// JWT 인증 추출 헬퍼
+function getUserFromToken(authHeader?: string | null) {
+  if (!authHeader || !authHeader.startsWith("Bearer ")) return null;
+  const token = authHeader.split(" ")[1];
+  try {
+    return jwt.verify(token, JWT_SECRET) as any;
+  } catch {
+    return null;
+  }
+}
+
+// -------------------------------------------------------------
+// [기본 상태 확인]
+// -------------------------------------------------------------
+const healthHandler = (c: any) => {
+  return c.json({
+    status: "ok",
+    runtime: "supabase_edge_function",
+    timestamp: new Date().toISOString(),
+  });
+};
+
+app.get("/", healthHandler);
+app.get("/health", healthHandler);
+app.get("/api/health", healthHandler);
+
+// -------------------------------------------------------------
+// [1. 회원 인증 API]
+// -------------------------------------------------------------
+
+// 회원가입
+const registerHandler = async (c: any) => {
+  try {
+    const supabase = getSupabaseClient();
+    const { email, username, password } = await c.req.json();
+    if (!email || !username || !password) {
+      return c.json({ error: "이메일, 닉네임, 비밀번호를 모두 입력해주세요." }, 400);
+    }
+
+    const trimmedEmail = email.trim().toLowerCase();
+    const trimmedUsername = username.trim();
+
+    const { data: existing } = await supabase
+      .from("users")
+      .select("id")
+      .eq("email", trimmedEmail)
+      .maybeSingle();
+
+    if (existing) {
+      return c.json({ error: "이미 등록된 이메일 계정입니다." }, 400);
+    }
+
+    const hashedPassword = bcrypt.hashSync(password, 10);
+    const { data: newUser, error: insertError } = await supabase
+      .from("users")
+      .insert({
+        email: trimmedEmail,
+        username: trimmedUsername,
+        password: hashedPassword,
+        role: "user",
+        bio: "새로 가입한 회원입니다.",
+      })
+      .select("id, email, username, role, bio, created_at")
+      .single();
+
+    if (insertError) {
+      return c.json({ error: "회원가입 처리 중 오류가 발생했습니다." }, 500);
+    }
+
+    const formattedUser = {
+      id: newUser.id,
+      email: newUser.email,
+      username: newUser.username,
+      role: newUser.role,
+      bio: newUser.bio,
+      joinedAt: formatDate(newUser.created_at),
+    };
+
+    const token = jwt.sign(
+      { id: formattedUser.id, email: formattedUser.email, username: formattedUser.username, role: formattedUser.role },
+      JWT_SECRET,
+      { expiresIn: SESSION_EXPIRY }
+    );
+
+    return c.json({ success: true, user: formattedUser, token }, 201);
+  } catch (err: any) {
+    return c.json({ error: err.message || "서버 오류" }, 500);
+  }
+};
+
+app.post("/auth/register", registerHandler);
+app.post("/api/auth/register", registerHandler);
+
+// 관리자 기본 정보 조회
+const adminInfoHandler = async (c: any) => {
+  try {
+    const supabase = getSupabaseClient();
+    const { data: admin } = await supabase
+      .from("users")
+      .select("id, email, username, role, bio, created_at")
+      .eq("role", "admin")
+      .order("id", { ascending: true })
+      .limit(1)
+      .maybeSingle();
+
+    const defaultEmail = Deno.env.get("ADMIN_EMAIL") || "iicbruce@naver.com";
+    const defaultName = Deno.env.get("ADMIN_NAME") || "bodyguard";
+
+    return c.json({
+      success: true,
+      email: admin ? admin.email : defaultEmail,
+      username: admin ? admin.username : defaultName,
+      name: admin ? admin.username : defaultName,
+    });
+  } catch {
+    return c.json({ error: "관리자 정보 조회 실패" }, 500);
+  }
+};
+
+app.get("/auth/admin-info", adminInfoHandler);
+app.get("/api/auth/admin-info", adminInfoHandler);
+
+// 로그인
+const loginHandler = async (c: any) => {
+  try {
+    const supabase = getSupabaseClient();
+    const { email, password } = await c.req.json();
+    if (!email || !password) {
+      return c.json({ error: "이메일과 비밀번호를 모두 입력해주세요." }, 400);
+    }
+
+    const trimmedEmail = email.trim().toLowerCase();
+    const { data: user } = await supabase
+      .from("users")
+      .select("*")
+      .eq("email", trimmedEmail)
+      .maybeSingle();
+
+    if (!user) {
+      return c.json({ error: "가입되지 않은 이메일 주소입니다." }, 401);
+    }
+
+    const isPasswordValid = user.password.startsWith("$2")
+      ? bcrypt.compareSync(password, user.password)
+      : user.password === password;
+
+    if (!isPasswordValid) {
+      return c.json({ error: "비밀번호가 일치하지 않습니다." }, 401);
+    }
+
+    if (!user.password.startsWith("$2")) {
+      const hashed = bcrypt.hashSync(password, 10);
+      await supabase.from("users").update({ password: hashed }).eq("id", user.id);
+    }
+
+    const userData = {
+      id: user.id,
+      email: user.email,
+      username: user.username,
+      role: user.role,
+      bio: user.bio,
+      joinedAt: formatDate(user.created_at),
+    };
+
+    const token = jwt.sign(
+      { id: user.id, email: user.email, username: user.username, role: user.role },
+      JWT_SECRET,
+      { expiresIn: SESSION_EXPIRY }
+    );
+
+    return c.json({ success: true, user: userData, token });
+  } catch (err: any) {
+    return c.json({ error: err.message || "로그인 처리 중 오류 발생" }, 500);
+  }
+};
+
+app.post("/auth/login", loginHandler);
+app.post("/api/auth/login", loginHandler);
+
+// 내 정보 조회
+const meHandler = async (c: any) => {
+  try {
+    const user = getUserFromToken(c.req.header("Authorization"));
+    if (!user) {
+      return c.json({ error: "인증 토큰이 누락되었거나 유효하지 않습니다." }, 401);
+    }
+
+    const supabase = getSupabaseClient();
+    const { data: userData } = await supabase
+      .from("users")
+      .select("id, email, username, role, bio, created_at")
+      .eq("id", user.id)
+      .maybeSingle();
+
+    if (!userData) {
+      return c.json({ error: "회원 정보를 찾을 수 없습니다." }, 404);
+    }
+
+    return c.json({
+      success: true,
+      user: {
+        id: userData.id,
+        email: userData.email,
+        username: userData.username,
+        role: userData.role,
+        bio: userData.bio,
+        joinedAt: formatDate(userData.created_at),
+      },
+    });
+  } catch {
+    return c.json({ error: "회원 정보 조회 실패" }, 500);
+  }
+};
+
+app.get("/auth/me", meHandler);
+app.get("/api/auth/me", meHandler);
+
+// 프로필 수정
+const profileHandler = async (c: any) => {
+  try {
+    const user = getUserFromToken(c.req.header("Authorization"));
+    if (!user) return c.json({ error: "인증 필요" }, 401);
+
+    const { username, bio } = await c.req.json();
+    if (!username || !username.trim()) {
+      return c.json({ error: "닉네임을 입력해주세요." }, 400);
+    }
+
+    const supabase = getSupabaseClient();
+    const { data: updated, error } = await supabase
+      .from("users")
+      .update({ username: username.trim(), bio: bio !== undefined ? bio : "" })
+      .eq("id", user.id)
+      .select("id, email, username, role, bio, created_at")
+      .single();
+
+    if (error) return c.json({ error: "프로필 수정 실패" }, 500);
+
+    return c.json({
+      success: true,
+      user: {
+        id: updated.id,
+        email: updated.email,
+        username: updated.username,
+        role: updated.role,
+        bio: updated.bio,
+        joinedAt: formatDate(updated.created_at),
+      },
+    });
+  } catch {
+    return c.json({ error: "프로필 수정 실패" }, 500);
+  }
+};
+
+app.put("/auth/profile", profileHandler);
+app.put("/api/auth/profile", profileHandler);
+
+// -------------------------------------------------------------
+// [2. 게시글(Posts) 및 댓글(Comments) API]
+// -------------------------------------------------------------
+
+// 게시글 목록
+const postsListHandler = async (c: any) => {
+  try {
+    const supabase = getSupabaseClient();
+    const { data: rawPosts, error: postsError } = await supabase
+      .from("posts")
+      .select("*")
+      .order("id", { ascending: false });
+
+    if (postsError) return c.json({ error: "게시글 목록 조회 실패" }, 500);
+
+    const { data: commentsCountData } = await supabase.from("comments").select("post_id");
+    const countMap: Record<number, number> = {};
+    if (commentsCountData) {
+      commentsCountData.forEach((row: any) => {
+        countMap[row.post_id] = (countMap[row.post_id] || 0) + 1;
+      });
+    }
+
+    const posts = (rawPosts || []).map((p: any) => ({
+      id: p.id,
+      title: p.title,
+      content: p.content,
+      author: p.author,
+      userId: p.user_id,
+      views: Number(p.views || 0),
+      likes: Number(p.likes || 0),
+      dislikes: Number(p.dislikes || 0),
+      isHidden: Boolean(p.is_hidden),
+      createdAt: formatDate(p.created_at),
+      updatedAt: formatDateTime(p.updated_at),
+      commentCount: Number(countMap[p.id] || 0),
+    }));
+
+    return c.json(posts);
+  } catch {
+    return c.json({ error: "게시글 목록을 불러오지 못했습니다." }, 500);
+  }
+};
+
+app.get("/posts", postsListHandler);
+app.get("/api/posts", postsListHandler);
+
+// 게시글 상세 조회
+const postDetailHandler = async (c: any) => {
+  try {
+    const postId = Number(c.req.param("id"));
+    const supabase = getSupabaseClient();
+
+    const { data: post, error } = await supabase
+      .from("posts")
+      .select("*")
+      .eq("id", postId)
+      .maybeSingle();
+
+    if (error || !post) return c.json({ error: "게시글을 찾을 수 없습니다." }, 404);
+
+    const { count: commentCount } = await supabase
+      .from("comments")
+      .select("*", { count: "exact", head: true })
+      .eq("post_id", postId);
+
+    const user = getUserFromToken(c.req.header("Authorization"));
+    const userIdQuery = c.req.query("userId");
+    const clientIdentifier = c.req.query("identifier");
+    const currentUserId = user?.id || (userIdQuery ? Number(userIdQuery) : null);
+    const identifier = currentUserId ? `user_${currentUserId}` : (clientIdentifier || "guest_anon");
+
+    const { data: reaction } = await supabase
+      .from("post_reactions")
+      .select("reaction_type")
+      .eq("post_id", postId)
+      .eq("user_identifier", identifier)
+      .maybeSingle();
+
+    return c.json({
+      id: post.id,
+      title: post.title,
+      content: post.content,
+      author: post.author,
+      userId: post.user_id,
+      views: Number(post.views || 0),
+      likes: Number(post.likes || 0),
+      dislikes: Number(post.dislikes || 0),
+      isHidden: Boolean(post.is_hidden),
+      createdAt: formatDate(post.created_at),
+      updatedAt: formatDateTime(post.updated_at),
+      commentCount: Number(commentCount || 0),
+      userReaction: reaction ? reaction.reaction_type : null,
+    });
+  } catch {
+    return c.json({ error: "게시글 상세 조회 실패" }, 500);
+  }
+};
+
+app.get("/posts/:id", postDetailHandler);
+app.get("/api/posts/:id", postDetailHandler);
+
+// 조회수 증가 API
+const postViewHandler = async (c: any) => {
+  try {
+    const postId = Number(c.req.param("id"));
+    const supabase = getSupabaseClient();
+
+    const { data: post } = await supabase.from("posts").select("id, views").eq("id", postId).maybeSingle();
+    if (!post) return c.json({ error: "게시글을 찾을 수 없습니다." }, 404);
+
+    const user = getUserFromToken(c.req.header("Authorization"));
+    let bodyUserId = null;
+    try {
+      const body = await c.req.json();
+      bodyUserId = body?.userId;
+    } catch {}
+
+    const currentUserId = user?.id || (bodyUserId ? Number(bodyUserId) : null);
+
+    if (!currentUserId) {
+      return c.json({
+        success: false,
+        message: "로그인 회원만 조회수가 카운트됩니다.",
+        views: Number(post.views || 0),
+      });
+    }
+
+    const updatedViews = Number(post.views || 0) + 1;
+    await supabase.from("posts").update({ views: updatedViews }).eq("id", postId);
+
+    return c.json({ success: true, views: updatedViews });
+  } catch {
+    return c.json({ error: "조회수 증가 실패" }, 500);
+  }
+};
+
+app.post("/posts/:id/view", postViewHandler);
+app.post("/api/posts/:id/view", postViewHandler);
+
+// 좋아요/싫어요 반응 토글 API
+const postReactHandler = async (c: any) => {
+  try {
+    const postId = Number(c.req.param("id"));
+    const { type, userId, identifier: clientIdentifier } = await c.req.json();
+    if (!type || (type !== "like" && type !== "dislike")) {
+      return c.json({ error: "type은 'like' 또는 'dislike'여야 합니다." }, 400);
+    }
+
+    const supabase = getSupabaseClient();
+    const { data: post } = await supabase.from("posts").select("id, likes, dislikes").eq("id", postId).maybeSingle();
+    if (!post) return c.json({ error: "게시글을 찾을 수 없습니다." }, 404);
+
+    const user = getUserFromToken(c.req.header("Authorization"));
+    const currentUserId = user?.id || (userId ? Number(userId) : null);
+    const identifier = currentUserId ? `user_${currentUserId}` : (clientIdentifier || "guest_anon");
+
+    const { data: existingReaction } = await supabase
+      .from("post_reactions")
+      .select("id, reaction_type")
+      .eq("post_id", postId)
+      .eq("user_identifier", identifier)
+      .maybeSingle();
+
+    let userReaction = null;
+    let newLikes = Number(post.likes || 0);
+    let newDislikes = Number(post.dislikes || 0);
+
+    if (existingReaction) {
+      if (existingReaction.reaction_type === type) {
+        await supabase.from("post_reactions").delete().eq("id", existingReaction.id);
+        if (type === "like") newLikes = Math.max(0, newLikes - 1);
+        else newDislikes = Math.max(0, newDislikes - 1);
+        userReaction = null;
+      } else {
+        await supabase.from("post_reactions").update({ reaction_type: type, created_at: new Date().toISOString() }).eq("id", existingReaction.id);
+        if (type === "like") {
+          newLikes += 1;
+          newDislikes = Math.max(0, newDislikes - 1);
+        } else {
+          newDislikes += 1;
+          newLikes = Math.max(0, newLikes - 1);
+        }
+        userReaction = type;
+      }
+    } else {
+      await supabase.from("post_reactions").insert({
+        post_id: postId,
+        user_id: currentUserId,
+        user_identifier: identifier,
+        reaction_type: type,
+      });
+      if (type === "like") newLikes += 1;
+      else newDislikes += 1;
+      userReaction = type;
+    }
+
+    await supabase.from("posts").update({ likes: newLikes, dislikes: newDislikes }).eq("id", postId);
+
+    return c.json({ success: true, likes: newLikes, dislikes: newDislikes, userReaction });
+  } catch (err: any) {
+    return c.json({ error: err.message || "반응 처리 실패" }, 500);
+  }
+};
+
+app.post("/posts/:id/react", postReactHandler);
+app.post("/api/posts/:id/react", postReactHandler);
+
+// 새 게시글 등록
+const postCreateHandler = async (c: any) => {
+  try {
+    const { title, content, author, userId } = await c.req.json();
+    if (!title || !content) return c.json({ error: "제목과 내용을 입력해주세요." }, 400);
+
+    const supabase = getSupabaseClient();
+    const { data: createdPost, error } = await supabase
+      .from("posts")
+      .insert({
+        title: title.trim(),
+        content: content.trim(),
+        author: author?.trim() || "익명",
+        user_id: userId ? Number(userId) : null,
+        views: 0,
+        likes: 0,
+        dislikes: 0,
+        is_hidden: false,
+      })
+      .select("*")
+      .single();
+
+    if (error) return c.json({ error: "게시글 등록 실패" }, 500);
+
+    return c.json(
+      {
+        id: createdPost.id,
+        title: createdPost.title,
+        content: createdPost.content,
+        author: createdPost.author,
+        userId: createdPost.user_id,
+        views: 0,
+        likes: 0,
+        dislikes: 0,
+        isHidden: false,
+        commentCount: 0,
+        createdAt: formatDate(createdPost.created_at),
+        updatedAt: formatDateTime(createdPost.updated_at),
+      },
+      201
+    );
+  } catch {
+    return c.json({ error: "게시글 등록 실패" }, 500);
+  }
+};
+
+app.post("/posts", postCreateHandler);
+app.post("/api/posts", postCreateHandler);
+
+// 댓글 목록 조회
+const commentsListHandler = async (c: any) => {
+  try {
+    const postId = Number(c.req.param("id"));
+    const supabase = getSupabaseClient();
+    const tokenUser = getUserFromToken(c.req.header("Authorization"));
+    const isAdmin = tokenUser?.role === "admin";
+
+    const { data: rawComments, error } = await supabase
+      .from("comments")
+      .select("*")
+      .eq("post_id", postId)
+      .order("id", { ascending: true });
+
+    if (error) return c.json({ error: "댓글 목록 조회 실패" }, 500);
+
+    const processed = (rawComments || []).map((comm: any) => {
+      const isHidden = Boolean(comm.is_hidden);
+      const isOwner = tokenUser && (tokenUser.id === comm.user_id || tokenUser.username === comm.author);
+
+      if (isHidden && !isAdmin && !isOwner) {
+        return {
+          id: comm.id,
+          postId: comm.post_id,
+          userId: comm.user_id,
+          author: comm.author,
+          content: "관리자에 의해 숨김 처리된 댓글입니다.",
+          isHidden: true,
+          isMasked: true,
+          createdAt: formatDateTime(comm.created_at),
+          updatedAt: formatDateTime(comm.updated_at),
+        };
+      }
+
+      return {
+        id: comm.id,
+        postId: comm.post_id,
+        userId: comm.user_id,
+        author: comm.author,
+        content: comm.content,
+        isHidden,
+        isMasked: false,
+        createdAt: formatDateTime(comm.created_at),
+        updatedAt: formatDateTime(comm.updated_at),
+      };
+    });
+
+    return c.json(processed);
+  } catch {
+    return c.json({ error: "댓글 목록 조회 실패" }, 500);
+  }
+};
+
+app.get("/posts/:id/comments", commentsListHandler);
+app.get("/api/posts/:id/comments", commentsListHandler);
+
+// 댓글 등록
+const commentCreateHandler = async (c: any) => {
+  try {
+    const postId = Number(c.req.param("id"));
+    const { author, content, userId } = await c.req.json();
+    if (!content || !content.trim()) return c.json({ error: "댓글 내용을 입력해주세요." }, 400);
+
+    const supabase = getSupabaseClient();
+    const tokenUser = getUserFromToken(c.req.header("Authorization"));
+    const finalUserId = tokenUser?.id || (userId ? Number(userId) : null);
+    const finalAuthor = (tokenUser?.username || author || "익명 방문자").trim();
+
+    const { data: newComment, error } = await supabase
+      .from("comments")
+      .insert({
+        post_id: postId,
+        user_id: finalUserId,
+        author: finalAuthor,
+        content: content.trim(),
+        is_hidden: false,
+      })
+      .select("*")
+      .single();
+
+    if (error) return c.json({ error: "댓글 등록 실패" }, 500);
+
+    return c.json(
+      {
+        id: newComment.id,
+        postId: newComment.post_id,
+        userId: newComment.user_id,
+        author: newComment.author,
+        content: newComment.content,
+        isHidden: false,
+        isMasked: false,
+        createdAt: formatDateTime(newComment.created_at),
+        updatedAt: formatDateTime(newComment.updated_at),
+      },
+      201
+    );
+  } catch {
+    return c.json({ error: "댓글 등록 실패" }, 500);
+  }
+};
+
+app.post("/posts/:id/comments", commentCreateHandler);
+app.post("/api/posts/:id/comments", commentCreateHandler);
+
+// Deno.serve 진입점
+export default app;
