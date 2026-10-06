@@ -722,10 +722,19 @@ app.get('/api/posts/:id', async (req, res) => {
   }
 });
 
-// 게시글 조회수 증가 API (회원 및 비회원 방문자 모두 카운트)
+// 게시글 조회수 증가 API (회원, 신규 유저 및 IP 기반 비회원 방문자 카운트)
 app.post('/api/posts/:id/view', async (req, res) => {
   try {
     const postId = Number(req.params.id);
+    const { userId, identifier: clientIdentifier } = req.body || {};
+
+    // 클라이언트 IP 추출 (프록시 x-forwarded-for 지원)
+    const rawIp = req.headers['x-forwarded-for'] || req.socket.remoteAddress || req.ip || '127.0.0.1';
+    const clientIp = typeof rawIp === 'string' ? rawIp.split(',')[0].trim() : '127.0.0.1';
+
+    // 요청자 식별자 결정 (회원 ID 우선, 없을 경우 게스트 식별자 또는 IP)
+    const viewerId = userId ? `user_${userId}` : (clientIdentifier || `ip_${clientIp}`);
+
     const { data: post, error } = await supabase
       .from('posts')
       .select('id, views')
@@ -747,7 +756,14 @@ app.post('/api/posts/:id/view', async (req, res) => {
       return res.status(500).json({ error: '조회수 증가에 실패했습니다.' });
     }
 
-    res.json({ success: true, views: updatedViews });
+    console.log(`[조회수 +1] 게시글 ID: ${postId}, 현재 조회수: ${updatedViews}, 조회자: ${viewerId}, IP: ${clientIp}`);
+
+    res.json({
+      success: true,
+      views: updatedViews,
+      clientIp,
+      viewer: viewerId,
+    });
   } catch (error) {
     console.error('조회수 증가 에러:', error);
     res.status(500).json({ error: '조회수 증가에 실패했습니다.' });

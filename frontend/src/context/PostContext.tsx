@@ -109,12 +109,14 @@ export const PostProvider: React.FC<{ children: React.ReactNode }> = ({ children
     }
   }, [user, userToken, adminUser, adminToken]);
 
-  // 유저 세션 로컬 스토리지 동기화
+  // 유저 세션 로컬 스토리지 동기화 (user 및 user_data 동시 보관)
   useEffect(() => {
     if (user) {
       localStorage.setItem('user_data', JSON.stringify(user));
+      localStorage.setItem('user', JSON.stringify(user));
     } else {
       localStorage.removeItem('user_data');
+      localStorage.removeItem('user');
     }
   }, [user]);
 
@@ -206,13 +208,18 @@ export const PostProvider: React.FC<{ children: React.ReactNode }> = ({ children
     return guestId;
   };
 
-  // 게시글 조회수 1회 증가 (회원 및 비회원 방문자 모두 카운트, 세션 기반 새로고침 연타 방지)
+  // 게시글 조회수 1회 증가 (회원, 신규 유저 및 비회원 방문자 모두 카운트, 로컬스토리지 및 IP 기반)
   const incrementPostView = async (id: number): Promise<number> => {
-    // 세션 스토리지 기반 조회수 중복 방지 (현재 탭/세션 내에서는 중복 폭증 방지)
-    const storageKey = 'viewed_posts_session';
+    const currentUid = user?.id || adminUser?.id;
+    const guestId = getGuestIdentifier();
+    const viewerKey = currentUid ? `user_${currentUid}` : guestId;
+
+    // 로컬스토리지(localStorage) 기반 조회수 기록 관리
+    // 신규 유저로 로그인하거나 새로운 브라우저로 접근하면 viewerKey가 달라져 정상적으로 조회수가 1 증가합니다.
+    const storageKey = `viewed_posts_${viewerKey}`;
     let viewedList: number[] = [];
     try {
-      const saved = sessionStorage.getItem(storageKey);
+      const saved = localStorage.getItem(storageKey);
       if (saved) {
         viewedList = JSON.parse(saved);
       }
@@ -227,11 +234,10 @@ export const PostProvider: React.FC<{ children: React.ReactNode }> = ({ children
 
     viewedList.push(id);
     try {
-      sessionStorage.setItem(storageKey, JSON.stringify(viewedList));
+      localStorage.setItem(storageKey, JSON.stringify(viewedList));
     } catch (e) {}
 
     try {
-      const currentUid = user?.id || adminUser?.id;
       const token = userToken || adminToken || localStorage.getItem('user_token') || localStorage.getItem('admin_token');
       const res = await fetch(`${API_BASE}/posts/${id}/view`, {
         method: 'POST',
@@ -239,7 +245,10 @@ export const PostProvider: React.FC<{ children: React.ReactNode }> = ({ children
           'Content-Type': 'application/json',
           ...(token ? { Authorization: `Bearer ${token}` } : {}),
         },
-        body: JSON.stringify({ userId: currentUid || null }),
+        body: JSON.stringify({
+          userId: currentUid || null,
+          identifier: viewerKey,
+        }),
       });
 
       if (res.ok) {

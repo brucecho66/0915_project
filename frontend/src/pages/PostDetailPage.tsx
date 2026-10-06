@@ -638,14 +638,11 @@ export const PostDetailPage: React.FC = () => {
               </div>
             ) : (
               comments.map((c) => {
-                // 댓글 작성자 본인 확인: user_id 일치 우선, 비로그인 작성자면 username 대조
+                // 댓글 작성자 본인 확인: 작성 유저의 고유 ID와 현재 로그인한 유저의 ID가 일치할 때만 본인으로 인정
+                // 새로운 유저가 접근 시 타인의 댓글에는 수정/삭제 버튼이 일체 노출되지 않습니다.
                 const isCommentOwner = Boolean(
-                  (user &&
-                    ((c.userId && user.id === c.userId) ||
-                      (!c.userId && user.username === c.author))) ||
-                    (adminUser &&
-                      ((c.userId && adminUser.id === c.userId) ||
-                        (!c.userId && adminUser.username === c.author)))
+                  (user && c.userId && Number(user.id) === Number(c.userId)) ||
+                  (adminUser && c.userId && Number(adminUser.id) === Number(c.userId))
                 );
 
                 const isEditingThis = editingCommentId === c.id;
