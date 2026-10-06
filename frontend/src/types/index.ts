@@ -20,6 +20,7 @@ export interface User {
   username: string;
   role?: 'admin' | 'user';
   bio?: string;
+  avatarUrl?: string;
   joinedAt: string;
   hasUser?: boolean;
   hasAdmin?: boolean;

@@ -152,7 +152,7 @@ app.get('/api/health', (req, res) => {
 // 회원가입 (Supabase Auth 유저 생성 및 public.users 데이터베이스 직접 동기화)
 app.post('/api/auth/register', async (req, res) => {
   try {
-    const { email, username, password } = req.body;
+    const { email, username, password, bio, avatarUrl, avatar_url } = req.body;
     if (!email || !username || !password) {
       return res.status(400).json({ error: '이메일, 닉네임, 비밀번호를 모두 입력해주세요.' });
     }
@@ -163,6 +163,8 @@ app.post('/api/auth/register', async (req, res) => {
 
     const trimmedEmail = email.trim().toLowerCase();
     const trimmedUsername = username.trim();
+    const trimmedBio = (bio || '').trim() || '새로 가입한 회원입니다.';
+    const finalAvatar = (avatarUrl || avatar_url || '').trim();
 
     // [1단계: Supabase Auth 유저 생성]
     // Supabase 대시보드 [Authentication -> Users]에 공식 인증 계정 생성
@@ -173,7 +175,8 @@ app.post('/api/auth/register', async (req, res) => {
       user_metadata: {
         username: trimmedUsername,
         role: 'user',
-        bio: '새로 가입한 회원입니다.',
+        bio: trimmedBio,
+        avatar_url: finalAvatar,
       },
     });
 
@@ -192,8 +195,8 @@ app.post('/api/auth/register', async (req, res) => {
         }
 
         // Auth에는 있으나 public.users DB에 누락된 경우: DB에 자동 생성하여 복구 동기화
-        const hashedPassword = bcrypt.hashSync(password, BCRYPT_SALT_ROUNDS);
-        const { data: recoveredUser, error: recoverErr } = await supabase
+        let recoveredUser;
+        let recoverRes = await supabase
           .from('users')
           .upsert(
             {
@@ -201,14 +204,33 @@ app.post('/api/auth/register', async (req, res) => {
               username: trimmedUsername,
               password: hashedPassword,
               role: 'user',
-              bio: '새로 가입한 회원입니다.',
+              bio: trimmedBio,
+              ...(finalAvatar ? { avatar_url: finalAvatar } : {}),
             },
             { onConflict: 'email' }
           )
-          .select('id, email, username, role, bio, created_at')
+          .select('*')
           .single();
 
-        if (!recoverErr && recoveredUser) {
+        if (recoverRes.error && (recoverRes.error.message?.includes('avatar_url') || recoverRes.error.code === 'PGRST204')) {
+          recoverRes = await supabase
+            .from('users')
+            .upsert(
+              {
+                email: trimmedEmail,
+                username: trimmedUsername,
+                password: hashedPassword,
+                role: 'user',
+                bio: trimmedBio,
+              },
+              { onConflict: 'email' }
+            )
+            .select('*')
+            .single();
+        }
+
+        if (!recoverRes.error && recoverRes.data) {
+          recoveredUser = recoverRes.data;
           console.log(`[Supabase 회원가입 동기화 복구 완료] ${trimmedEmail} (DB ID: ${recoveredUser.id})`);
           const formattedUser = {
             id: recoveredUser.id,
@@ -216,6 +238,7 @@ app.post('/api/auth/register', async (req, res) => {
             username: recoveredUser.username,
             role: recoveredUser.role,
             bio: recoveredUser.bio,
+            avatarUrl: recoveredUser.avatar_url || finalAvatar || '',
             joinedAt: formatDate(recoveredUser.created_at),
           };
           const token = jwt.sign(
@@ -233,28 +256,41 @@ app.post('/api/auth/register', async (req, res) => {
 
     // [2단계: Supabase 데이터베이스 (public.users) 직접 저장]
     const hashedPassword = bcrypt.hashSync(password, BCRYPT_SALT_ROUNDS);
-    const { data: newUser, error: insertError } = await supabase
+    const userPayload = {
+      email: trimmedEmail,
+      username: trimmedUsername,
+      password: hashedPassword,
+      role: 'user',
+      bio: trimmedBio,
+    };
+    if (finalAvatar) {
+      userPayload.avatar_url = finalAvatar;
+    }
+
+    let newUser;
+    let insertResult = await supabase
       .from('users')
-      .upsert(
-        {
-          email: trimmedEmail,
-          username: trimmedUsername,
-          password: hashedPassword,
-          role: 'user',
-          bio: '새로 가입한 회원입니다.',
-        },
-        { onConflict: 'email' }
-      )
-      .select('id, email, username, role, bio, created_at')
+      .upsert(userPayload, { onConflict: 'email' })
+      .select('*')
       .single();
 
-    if (insertError) {
-      console.error('Supabase 데이터베이스 회원 등록 실패:', insertError);
+    if (insertResult.error && (insertResult.error.message?.includes('avatar_url') || insertResult.error.code === 'PGRST204')) {
+      const { avatar_url: _discard, ...fallbackPayload } = userPayload;
+      insertResult = await supabase
+        .from('users')
+        .upsert(fallbackPayload, { onConflict: 'email' })
+        .select('*')
+        .single();
+    }
+
+    if (insertResult.error) {
+      console.error('Supabase 데이터베이스 회원 등록 실패:', insertResult.error);
       if (authUser?.user?.id) {
         await supabase.auth.admin.deleteUser(authUser.user.id);
       }
       return res.status(500).json({ error: '데이터베이스 회원 정보 저장 중 오류가 발생했습니다.' });
     }
+    newUser = insertResult.data;
 
     console.log(`[Supabase 회원가입 성공] Auth ID: ${authUser?.user?.id}, DB ID: ${newUser.id}, Email: ${trimmedEmail}`);
 
@@ -265,7 +301,8 @@ app.post('/api/auth/register', async (req, res) => {
           user_id: newUser.id,
           email: trimmedEmail,
           username: trimmedUsername,
-          bio: '새로 가입한 회원입니다.',
+          bio: trimmedBio,
+          avatar_url: finalAvatar,
           role: 'user',
         },
         { onConflict: 'email' }
@@ -280,6 +317,7 @@ app.post('/api/auth/register', async (req, res) => {
       username: newUser.username,
       role: newUser.role,
       bio: newUser.bio,
+      avatarUrl: newUser.avatar_url || finalAvatar || '',
       joinedAt: formatDate(newUser.created_at),
     };
 
@@ -464,6 +502,7 @@ app.post('/api/auth/login', async (req, res) => {
               username: syncedUser.username,
               role: syncedUser.role,
               bio: syncedUser.bio,
+              avatarUrl: syncedUser.avatar_url || authSignIn.user.user_metadata?.avatar_url || '',
               joinedAt: formatDate(syncedUser.created_at),
             };
 
@@ -503,6 +542,7 @@ app.post('/api/auth/login', async (req, res) => {
       username: user.username,
       role: user.role,
       bio: user.bio,
+      avatarUrl: user.avatar_url || '',
       joinedAt: formatDate(user.created_at),
     };
 
@@ -524,7 +564,7 @@ app.get('/api/auth/me', authenticateUser, async (req, res) => {
   try {
     const { data: user, error } = await supabase
       .from('users')
-      .select('id, email, username, role, bio, created_at')
+      .select('*')
       .eq('id', req.user.id)
       .maybeSingle();
 
@@ -540,6 +580,7 @@ app.get('/api/auth/me', authenticateUser, async (req, res) => {
         username: user.username,
         role: user.role,
         bio: user.bio,
+        avatarUrl: user.avatar_url || '',
         joinedAt: formatDate(user.created_at),
       },
     });
@@ -552,25 +593,43 @@ app.get('/api/auth/me', authenticateUser, async (req, res) => {
 // 프로필 정보 수정 (닉네임, 자기소개)
 app.put('/api/auth/profile', authenticateUser, async (req, res) => {
   try {
-    const { username, bio } = req.body;
+    const { username, bio, avatarUrl, avatar_url } = req.body;
     if (!username || !username.trim()) {
       return res.status(400).json({ error: '닉네임을 입력해주세요.' });
     }
 
-    const { data: updated, error } = await supabase
+    const finalAvatar = avatarUrl !== undefined ? avatarUrl : (avatar_url !== undefined ? avatar_url : null);
+    const updatePayload = {
+      username: username.trim(),
+      bio: bio !== undefined ? bio : '',
+    };
+    if (finalAvatar !== null) {
+      updatePayload.avatar_url = finalAvatar;
+    }
+
+    let updated;
+    let updateRes = await supabase
       .from('users')
-      .update({
-        username: username.trim(),
-        bio: bio !== undefined ? bio : '',
-      })
+      .update(updatePayload)
       .eq('id', req.user.id)
-      .select('id, email, username, role, bio, created_at')
+      .select('*')
       .single();
 
-    if (error) {
-      console.error('프로필 수정 실패:', error);
+    if (updateRes.error && (updateRes.error.message?.includes('avatar_url') || updateRes.error.code === 'PGRST204')) {
+      const { avatar_url: _discard, ...fallbackUpdate } = updatePayload;
+      updateRes = await supabase
+        .from('users')
+        .update(fallbackUpdate)
+        .eq('id', req.user.id)
+        .select('*')
+        .single();
+    }
+
+    if (updateRes.error || !updateRes.data) {
+      console.error('프로필 수정 실패:', updateRes.error);
       return res.status(500).json({ error: '프로필 수정에 실패했습니다.' });
     }
+    updated = updateRes.data;
 
     // [profiles 분리 테이블 동기화 (존재 시)]
     try {
@@ -580,6 +639,7 @@ app.put('/api/auth/profile', authenticateUser, async (req, res) => {
           email: updated.email,
           username: updated.username,
           bio: updated.bio || '',
+          avatar_url: updated.avatar_url || '',
           role: updated.role || 'user',
           updated_at: new Date().toISOString(),
         },
@@ -597,6 +657,7 @@ app.put('/api/auth/profile', authenticateUser, async (req, res) => {
         username: updated.username,
         role: updated.role,
         bio: updated.bio,
+        avatarUrl: updated.avatar_url || '',
         joinedAt: formatDate(updated.created_at),
       },
     });

@@ -24,6 +24,7 @@ CREATE TABLE IF NOT EXISTS public.users (
   password TEXT NOT NULL,
   role TEXT DEFAULT 'user',
   bio TEXT DEFAULT '',
+  avatar_url TEXT DEFAULT '',
   created_at TIMESTAMPTZ DEFAULT TIMEZONE('utc'::text, NOW()),
   updated_at TIMESTAMPTZ DEFAULT TIMEZONE('utc'::text, NOW())
 );

@@ -7,10 +7,20 @@ export const RegisterPage: React.FC = () => {
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
   const [confirmPassword, setConfirmPassword] = useState('');
+  const [bio, setBio] = useState('');
+  const [avatarUrl, setAvatarUrl] = useState('');
   const [error, setError] = useState('');
   const [isLoading, setIsLoading] = useState(false);
   const { register } = usePosts();
   const navigate = useNavigate();
+
+  // 기본 아바타 프리셋
+  const avatarPresets = [
+    { label: '🧑‍💻 개발자', url: 'https://api.dicebear.com/7.x/bottts/svg?seed=dev' },
+    { label: '🚀 탐험가', url: 'https://api.dicebear.com/7.x/bottts/svg?seed=explorer' },
+    { label: '🐱 고양이', url: 'https://api.dicebear.com/7.x/bottts/svg?seed=cat' },
+    { label: '⭐ 스타', url: 'https://api.dicebear.com/7.x/bottts/svg?seed=star' },
+  ];
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -27,7 +37,7 @@ export const RegisterPage: React.FC = () => {
     }
 
     setIsLoading(true);
-    const result = await register(email, username, password);
+    const result = await register(email, username, password, bio.trim(), avatarUrl.trim());
     setIsLoading(false);
 
     if (result.success) {
@@ -40,7 +50,7 @@ export const RegisterPage: React.FC = () => {
 
   return (
     <div className="auth-page">
-      <div className="auth-card">
+      <div className="auth-card" style={{ maxWidth: '480px' }}>
         <div className="auth-header">
           <h2>회원가입</h2>
           <p>새로운 계정을 만들어 커뮤니티 활동을 시작하세요.</p>
@@ -64,7 +74,7 @@ export const RegisterPage: React.FC = () => {
 
         <form onSubmit={handleSubmit} className="auth-form">
           <div className="form-group">
-            <label htmlFor="reg-username">사용자 닉네임</label>
+            <label htmlFor="reg-username">사용자 닉네임 *</label>
             <input
               id="reg-username"
               type="text"
@@ -76,7 +86,7 @@ export const RegisterPage: React.FC = () => {
           </div>
 
           <div className="form-group">
-            <label htmlFor="reg-email">이메일</label>
+            <label htmlFor="reg-email">이메일 *</label>
             <input
               id="reg-email"
               type="email"
@@ -88,7 +98,7 @@ export const RegisterPage: React.FC = () => {
           </div>
 
           <div className="form-group">
-            <label htmlFor="reg-password">비밀번호</label>
+            <label htmlFor="reg-password">비밀번호 *</label>
             <input
               id="reg-password"
               type="password"
@@ -100,7 +110,7 @@ export const RegisterPage: React.FC = () => {
           </div>
 
           <div className="form-group">
-            <label htmlFor="reg-confirm">비밀번호 확인</label>
+            <label htmlFor="reg-confirm">비밀번호 확인 *</label>
             <input
               id="reg-confirm"
               type="password"
@@ -111,7 +121,61 @@ export const RegisterPage: React.FC = () => {
             />
           </div>
 
-          <button type="submit" className="btn btn-primary btn-block" disabled={isLoading}>
+          {/* Supabase bio(자기소개) 필드 연동 */}
+          <div className="form-group">
+            <label htmlFor="reg-bio">자기소개 / 한 줄 소개 (선택)</label>
+            <textarea
+              id="reg-bio"
+              placeholder="자신을 소개하는 한 줄을 입력해 보세요. (예: 웹 풀스택 개발자 지망생)"
+              rows={2}
+              value={bio}
+              onChange={(e) => setBio(e.target.value)}
+              style={{
+                width: '100%',
+                padding: '0.65rem 0.85rem',
+                border: '1px solid #cbd5e1',
+                borderRadius: '8px',
+                fontSize: '0.925rem',
+                fontFamily: 'inherit',
+                resize: 'vertical',
+              }}
+            />
+          </div>
+
+          {/* Supabase avatar_url(프로필 사진) 필드 연동 */}
+          <div className="form-group">
+            <label htmlFor="reg-avatar">프로필 아바타 이미지 URL (선택)</label>
+            <div style={{ display: 'flex', gap: '0.5rem', marginBottom: '0.5rem', flexWrap: 'wrap' }}>
+              {avatarPresets.map((preset) => (
+                <button
+                  key={preset.url}
+                  type="button"
+                  onClick={() => setAvatarUrl(preset.url)}
+                  style={{
+                    padding: '0.3rem 0.6rem',
+                    fontSize: '0.8rem',
+                    borderRadius: '6px',
+                    border: avatarUrl === preset.url ? '2px solid #2563eb' : '1px solid #cbd5e1',
+                    backgroundColor: avatarUrl === preset.url ? '#eff6ff' : '#fff',
+                    color: avatarUrl === preset.url ? '#1d4ed8' : '#334155',
+                    cursor: 'pointer',
+                    fontWeight: 500,
+                  }}
+                >
+                  {preset.label}
+                </button>
+              ))}
+            </div>
+            <input
+              id="reg-avatar"
+              type="url"
+              placeholder="https://example.com/avatar.png 또는 위 아바타 선택"
+              value={avatarUrl}
+              onChange={(e) => setAvatarUrl(e.target.value)}
+            />
+          </div>
+
+          <button type="submit" className="btn btn-primary btn-block" disabled={isLoading} style={{ marginTop: '0.5rem' }}>
             {isLoading ? '가입 처리 중...' : '회원가입 완료'}
           </button>
         </form>

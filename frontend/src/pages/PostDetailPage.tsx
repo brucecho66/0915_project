@@ -75,23 +75,19 @@ export const PostDetailPage: React.FC = () => {
     const identParam = currentUid ? `userId=${currentUid}` : (guestId ? `identifier=${guestId}` : '');
     const postUrl = identParam ? `${API_BASE}/posts/${postId}?${identParam}` : `${API_BASE}/posts/${postId}`;
 
-    Promise.all([
-      fetch(postUrl, { headers: authHeaders }).then(async (res) => {
-        if (res.ok) return await res.json();
-        return null;
-      }),
-      fetch(`${API_BASE}/posts/${postId}/comments`, { headers: authHeaders }).then(async (res) => {
-        if (res.ok) return await res.json();
-        return [];
-      }),
-      incrementPostView(postId),
-    ])
-      .then(([postData, commentsData, viewCount]) => {
+    const loadDetail = async () => {
+      try {
+        const [viewCount, postData, commentsData] = await Promise.all([
+          incrementPostView(postId),
+          fetch(postUrl, { headers: authHeaders }).then(async (res) => (res.ok ? await res.json() : null)),
+          fetch(`${API_BASE}/posts/${postId}/comments`, { headers: authHeaders }).then(async (res) => (res.ok ? await res.json() : [])),
+        ]);
+
         if (isCurrent) {
           if (postData) {
             const finalViews = typeof viewCount === 'number' && viewCount > 0
               ? Math.max(postData.views || 0, viewCount)
-              : (postData.views || 0);
+              : ((postData.views || 0) + 1);
             setPost({ ...postData, views: finalViews });
             setLikes(postData.likes || 0);
             setDislikes(postData.dislikes || 0);
@@ -103,15 +99,16 @@ export const PostDetailPage: React.FC = () => {
             setComments(commentsData);
           }
         }
-      })
-      .catch((err) => {
+      } catch (err) {
         console.error('게시글 및 댓글 조회 실패:', err);
-      })
-      .finally(() => {
+      } finally {
         if (isCurrent) {
           setIsLoading(false);
         }
-      });
+      }
+    };
+
+    loadDetail();
 
     return () => {
       isCurrent = false;

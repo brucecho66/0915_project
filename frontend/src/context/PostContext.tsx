@@ -40,7 +40,7 @@ interface PostContextType {
   likePost: (id: number) => Promise<number>;
   reactPost: (id: number, type: 'like' | 'dislike') => Promise<{ success: boolean; likes: number; dislikes: number; userReaction: 'like' | 'dislike' | null }>;
   login: (email: string, password: string) => Promise<{ success: boolean; message?: string }>;
-  register: (email: string, username: string, password: string) => Promise<{ success: boolean; message?: string }>;
+  register: (email: string, username: string, password: string, bio?: string, avatarUrl?: string) => Promise<{ success: boolean; message?: string }>;
   logout: () => void;
   updateProfile: (username: string, bio: string) => Promise<{ success: boolean; message?: string }>;
   adminLogin: (email: string, password: string) => Promise<{ success: boolean; message?: string }>;
@@ -214,29 +214,6 @@ export const PostProvider: React.FC<{ children: React.ReactNode }> = ({ children
     const guestId = getGuestIdentifier();
     const viewerKey = currentUid ? `user_${currentUid}` : guestId;
 
-    // 로컬스토리지(localStorage) 기반 조회수 기록 관리
-    // 신규 유저로 로그인하거나 새로운 브라우저로 접근하면 viewerKey가 달라져 정상적으로 조회수가 1 증가합니다.
-    const storageKey = `viewed_posts_${viewerKey}`;
-    let viewedList: number[] = [];
-    try {
-      const saved = localStorage.getItem(storageKey);
-      if (saved) {
-        viewedList = JSON.parse(saved);
-      }
-    } catch (e) {
-      viewedList = [];
-    }
-
-    if (viewedList.includes(id)) {
-      const current = posts.find((p) => p.id === id);
-      return current?.views || 0;
-    }
-
-    viewedList.push(id);
-    try {
-      localStorage.setItem(storageKey, JSON.stringify(viewedList));
-    } catch (e) {}
-
     try {
       const token = userToken || adminToken || localStorage.getItem('user_token') || localStorage.getItem('admin_token');
       const res = await fetch(`${API_BASE}/posts/${id}/view`, {
@@ -254,7 +231,7 @@ export const PostProvider: React.FC<{ children: React.ReactNode }> = ({ children
       if (res.ok) {
         const data = await res.json();
         if (data.success && typeof data.views === 'number') {
-          // 전체 posts 상태의 views 동기화
+          // 전체 posts 상태의 views 즉시 동기화
           setPosts((prev) =>
             prev.map((p) => (p.id === id ? { ...p, views: data.views } : p))
           );
@@ -266,7 +243,7 @@ export const PostProvider: React.FC<{ children: React.ReactNode }> = ({ children
     }
 
     const current = posts.find((p) => p.id === id);
-    return current?.views || 0;
+    return (current?.views || 0) + 1;
   };
 
   // 게시글 상세 조회 및 조회수/댓글수 동기화 (실제 DB 실시간 반영)
@@ -484,17 +461,19 @@ export const PostProvider: React.FC<{ children: React.ReactNode }> = ({ children
     }
   };
 
-  // 회원가입 (실제 Supabase 사용자 등록)
+  // 회원가입 (실제 Supabase 사용자 등록 및 bio, avatarUrl 동기화)
   const register = async (
     email: string,
     username: string,
-    password: string
+    password: string,
+    bio?: string,
+    avatarUrl?: string
   ): Promise<{ success: boolean; message?: string }> => {
     try {
       const res = await fetch(`${API_BASE}/auth/register`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ email, username, password }),
+        body: JSON.stringify({ email, username, password, bio, avatarUrl }),
       });
 
       const data = await res.json();
