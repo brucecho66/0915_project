@@ -5,10 +5,12 @@ import fs from 'fs';
 import path from 'path';
 import { fileURLToPath } from 'url';
 
-dotenv.config();
-
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
+
+// 환경 변수 설정 (backend/.env 및 루트 .env 로드)
+dotenv.config({ path: path.resolve(__dirname, '.env') });
+dotenv.config({ path: path.resolve(__dirname, '../.env') });
 
 // Supabase 환경 변수 로드
 const supabaseUrl = process.env.SUPABASE_URL || '';
@@ -137,6 +139,70 @@ export const syncAdminCredentialsFromEnv = async () => {
           console.log(`[DB 동기화] Supabase 관리자 계정 정보가 최신으로 동기화되었습니다: ${adminEmail}`);
         }
       }
+    }
+
+    // 5. [admins 테이블 독립 동기화] public.admins 테이블이 생성되어 있는 경우 관리자 정보 upsert
+    try {
+      const { data: adminInTable } = await supabase
+        .from('admins')
+        .select('id')
+        .eq('email', adminEmail)
+        .maybeSingle();
+
+      if (!adminInTable) {
+        await supabase.from('admins').insert({
+          email: adminEmail,
+          username: adminName,
+          password: hashedPassword,
+          role: 'admin',
+        });
+      } else {
+        await supabase
+          .from('admins')
+          .update({
+            email: adminEmail,
+            username: adminName,
+            password: hashedPassword,
+            role: 'admin',
+            updated_at: new Date().toISOString(),
+          })
+          .eq('email', adminEmail);
+      }
+    } catch (adminTableErr) {
+      // admins 테이블이 아직 없는 경우 정상 무시
+    }
+
+    // 6. [profiles 테이블 독립 동기화] public.profiles 테이블이 생성되어 있는 경우 관리자 프로필 upsert
+    try {
+      const adminUserId = targetUser?.id || null;
+      const { data: profileInTable } = await supabase
+        .from('profiles')
+        .select('id')
+        .eq('email', adminEmail)
+        .maybeSingle();
+
+      if (!profileInTable) {
+        await supabase.from('profiles').insert({
+          email: adminEmail,
+          username: adminName,
+          bio: '시스템 총괄 최고관리자 계정입니다.',
+          role: 'admin',
+          user_id: adminUserId,
+        });
+      } else {
+        await supabase
+          .from('profiles')
+          .update({
+            email: adminEmail,
+            username: adminName,
+            role: 'admin',
+            user_id: adminUserId,
+            updated_at: new Date().toISOString(),
+          })
+          .eq('email', adminEmail);
+      }
+    } catch (profileTableErr) {
+      // profiles 테이블이 아직 없는 경우 정상 무시
     }
 
     return { adminEmail, adminName, adminUsername: adminName, adminPassword };

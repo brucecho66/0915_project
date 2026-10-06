@@ -103,7 +103,7 @@ export const PostEditPage: React.FC = () => {
     setIsSubmitting(false);
 
     if (result.success) {
-      alert('게시글이 성공적으로 수정되었습니다! (SQLite DB 반영 완료)');
+      alert('게시글이 성공적으로 수정되었습니다! (Supabase DB 반영 완료)');
       navigate(`/posts/${post.id}`);
     } else {
       alert(result.message || '게시글 수정에 실패했습니다.');

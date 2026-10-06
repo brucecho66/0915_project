@@ -125,9 +125,54 @@ const registerHandler = async (c: any) => {
     if (authError) {
       const errMsg = (authError.message || "").toLowerCase();
       if (errMsg.includes("already") || errMsg.includes("registered") || errMsg.includes("exists")) {
+        const { data: existingDbUser } = await supabase
+          .from("users")
+          .select("id")
+          .eq("email", trimmedEmail)
+          .maybeSingle();
+
+        if (existingDbUser) {
+          return c.json({ error: "이미 등록된 이메일 계정입니다." }, 400);
+        }
+
+        const hashedPassword = bcrypt.hashSync(password, 10);
+        const { data: recoveredUser, error: recoverErr } = await supabase
+          .from("users")
+          .upsert(
+            {
+              email: trimmedEmail,
+              username: trimmedUsername,
+              password: hashedPassword,
+              role: "user",
+              bio: "새로 가입한 회원입니다.",
+            },
+            { onConflict: "email" }
+          )
+          .select("id, email, username, role, bio, created_at")
+          .single();
+
+        if (!recoverErr && recoveredUser) {
+          const formattedUser = {
+            id: recoveredUser.id,
+            name: recoveredUser.username,
+            nickname: recoveredUser.username,
+            username: recoveredUser.username,
+            email: recoveredUser.email,
+            role: recoveredUser.role,
+            bio: recoveredUser.bio,
+            joinedAt: formatDate(recoveredUser.created_at),
+          };
+          const token = jwt.sign(
+            { id: formattedUser.id, email: formattedUser.email, username: formattedUser.username, role: formattedUser.role },
+            JWT_SECRET,
+            { expiresIn: SESSION_EXPIRY }
+          );
+          return c.json({ success: true, user: formattedUser, token }, 201);
+        }
+
         return c.json({ error: "이미 등록된 이메일 계정입니다." }, 400);
       }
-      return c.json({ error: `Supabase 권한 회원가입 오류: ${authError.message}` }, 400);
+      return c.json({ error: `Supabase Auth 회원가입 오류: ${authError.message}` }, 400);
     }
 
     // [2단계: Supabase 데이터베이스(public.users) 동기화]

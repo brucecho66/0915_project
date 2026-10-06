@@ -41,7 +41,7 @@ export const PostCreatePage: React.FC = () => {
     try {
       const newId = await addPost(title.trim(), content.trim(), currentAuthor);
       if (newId) {
-        alert('게시글이 성공적으로 등록되었습니다! (SQLite DB 저장 완료)');
+        alert('게시글이 성공적으로 등록되었습니다! (Supabase DB 저장 완료)');
         navigate(`/posts/${newId}`);
       } else {
         alert('게시글 등록에 실패했습니다. 다시 시도해 주세요.');

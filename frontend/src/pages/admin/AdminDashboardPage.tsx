@@ -34,6 +34,7 @@ export const AdminDashboardPage: React.FC<{ defaultCategory?: AdminCategory }> =
   const [postSearch, setPostSearch] = useState('');
   const [postFilter, setPostFilter] = useState<'all' | 'visible' | 'hidden'>('all');
   const [userSearch, setUserSearch] = useState('');
+  const [userRoleFilter, setUserRoleFilter] = useState<'all' | 'admin' | 'user' | 'user_only' | 'profile_only'>('all');
   const [commentSearch, setCommentSearch] = useState('');
   const [commentFilter, setCommentFilter] = useState<'all' | 'visible' | 'hidden'>('all');
 
@@ -143,11 +144,49 @@ export const AdminDashboardPage: React.FC<{ defaultCategory?: AdminCategory }> =
     return true;
   });
 
-  const filteredUsers = users.filter(
-    (u) =>
-      u.username.toLowerCase().includes(userSearch.toLowerCase()) ||
-      u.email.toLowerCase().includes(userSearch.toLowerCase())
-  );
+  // 관리자가 users 목록에 누락되어 있다면 effectiveAdmin을 목록에 자동 병합
+  const displayUsers = React.useMemo(() => {
+    let list = [...users];
+    const adminEmail = (effectiveAdmin?.email || 'iicbruce@naver.com').toLowerCase();
+    const hasAdmin = list.some(
+      (u) => u.role === 'admin' || (u.email && u.email.toLowerCase() === adminEmail)
+    );
+    if (!hasAdmin && effectiveAdmin) {
+      list.unshift({
+        id: effectiveAdmin.id || 8,
+        email: effectiveAdmin.email,
+        username: effectiveAdmin.username,
+        role: 'admin',
+        bio: effectiveAdmin.bio || '시스템 총괄 최고관리자 계정입니다.',
+        joinedAt: effectiveAdmin.joinedAt || '2026-09-28',
+        hasUser: true,
+        hasAdmin: true,
+        hasProfile: true,
+        sourceTable: 'admins',
+        statusType: 'admin',
+      });
+    }
+    return list;
+  }, [users, effectiveAdmin]);
+
+  const filteredUsers = displayUsers
+    .filter((u) => {
+      const matchesSearch =
+        u.username.toLowerCase().includes(userSearch.toLowerCase()) ||
+        u.email.toLowerCase().includes(userSearch.toLowerCase());
+      if (!matchesSearch) return false;
+      if (userRoleFilter === 'admin') return u.role === 'admin';
+      if (userRoleFilter === 'user') return u.role !== 'admin';
+      if (userRoleFilter === 'user_only') return u.statusType === 'user_only';
+      if (userRoleFilter === 'profile_only') return u.statusType === 'profile_only';
+      return true;
+    })
+    .sort((a, b) => {
+      // 👑 최고관리자 목록 상단 우선 정렬
+      if (a.role === 'admin' && b.role !== 'admin') return -1;
+      if (a.role !== 'admin' && b.role === 'admin') return 1;
+      return (Number(b.id) || 0) - (Number(a.id) || 0);
+    });
 
   const filteredComments = comments.filter((c) => {
     const matchesSearch =
@@ -245,7 +284,7 @@ export const AdminDashboardPage: React.FC<{ defaultCategory?: AdminCategory }> =
             onClick={() => handleSelectCategory('users')}
           >
             <span className="nav-icon">👥</span>
-            <span>회원 관리</span>
+            <span>회원 관리 (유저 목록)</span>
             <span className="item-count">{users.length}</span>
           </button>
           <button
@@ -558,7 +597,13 @@ export const AdminDashboardPage: React.FC<{ defaultCategory?: AdminCategory }> =
                                 onClick={async () => {
                                   const actionMsg = post.isHidden ? '공개로 전환' : '숨김 처리';
                                   if (window.confirm(`'${post.title}' 게시글을 ${actionMsg}하시겠습니까?`)) {
-                                    await toggleHidePost(post.id);
+                                    const res = await toggleHidePost(post.id);
+                                    if (res.success) {
+                                      alert(res.message || `게시글이 ${actionMsg}되었습니다.`);
+                                      await fetchPosts();
+                                    } else {
+                                      alert(res.message || '게시글 숨김 처리에 실패했습니다.');
+                                    }
                                   }
                                 }}
                                 className={`btn-table-hide ${post.isHidden ? 'unhide' : ''}`}
@@ -568,13 +613,19 @@ export const AdminDashboardPage: React.FC<{ defaultCategory?: AdminCategory }> =
                               </button>
                               <button
                                 type="button"
-                                onClick={() => {
+                                onClick={async () => {
                                   if (
                                     window.confirm(
-                                      `'${post.title}' 게시글을 영구 삭제하시겠습니까? (SQLite DB에서 완전히 삭제됩니다)`
+                                      `'${post.title}' 게시글을 영구 삭제하시겠습니까? (Supabase DB에서 완전히 삭제됩니다)`
                                     )
                                   ) {
-                                    deletePost(post.id);
+                                    const res = await deletePost(post.id);
+                                    if (res.success) {
+                                      alert(res.message || '게시글이 성공적으로 삭제되었습니다.');
+                                      await fetchPosts();
+                                    } else {
+                                      alert(res.message || '게시글 삭제에 실패했습니다.');
+                                    }
                                   }
                                 }}
                                 className="btn-table-delete"
@@ -593,67 +644,264 @@ export const AdminDashboardPage: React.FC<{ defaultCategory?: AdminCategory }> =
             </div>
           )}
 
-          {/* 카테고리 3: 회원 관리 */}
+          {/* 카테고리 3: 회원 관리 (Supabase 유저 목록) */}
           {activeCategory === 'users' && (
             <div className="admin-card">
-              <div className="admin-toolbar">
+              <div className="admin-toolbar" style={{ flexWrap: 'wrap', gap: '0.75rem' }}>
                 <div className="admin-search-input">
                   <input
                     type="text"
-                    placeholder="닉네임 또는 이메일 검색..."
+                    placeholder="회원 닉네임 또는 이메일 검색..."
                     value={userSearch}
                     onChange={(e) => setUserSearch(e.target.value)}
                   />
+                  <span className="search-icon">🔍</span>
                 </div>
-                <div className="toolbar-info">총 {filteredUsers.length}명의 회원</div>
+
+                {/* 권한 및 DB 분리 테이블별 필터 탭 */}
+                <div className="admin-filter-tabs">
+                  <button
+                    type="button"
+                    className={`btn-filter ${userRoleFilter === 'all' ? 'active' : ''}`}
+                    onClick={() => setUserRoleFilter('all')}
+                  >
+                    전체 ({displayUsers.length})
+                  </button>
+                  <button
+                    type="button"
+                    className={`btn-filter ${userRoleFilter === 'admin' ? 'active' : ''}`}
+                    onClick={() => setUserRoleFilter('admin')}
+                  >
+                    👑 최고관리자 ({displayUsers.filter((u) => u.role === 'admin').length})
+                  </button>
+                  <button
+                    type="button"
+                    className={`btn-filter ${userRoleFilter === 'user' ? 'active' : ''}`}
+                    onClick={() => setUserRoleFilter('user')}
+                  >
+                    👤 일반회원 ({displayUsers.filter((u) => u.role !== 'admin').length})
+                  </button>
+                  <button
+                    type="button"
+                    className={`btn-filter ${userRoleFilter === 'user_only' ? 'active' : ''}`}
+                    onClick={() => setUserRoleFilter('user_only')}
+                    title="users 테이블에만 존재 (프로필 미연동)"
+                  >
+                    👤 유저만 ({displayUsers.filter((u) => u.statusType === 'user_only').length})
+                  </button>
+                  <button
+                    type="button"
+                    className={`btn-filter ${userRoleFilter === 'profile_only' ? 'active' : ''}`}
+                    onClick={() => setUserRoleFilter('profile_only')}
+                    title="profiles 테이블에만 존재 (계정 미연동)"
+                  >
+                    📇 프로필만 ({displayUsers.filter((u) => u.statusType === 'profile_only').length})
+                  </button>
+                </div>
+
+                <button
+                  type="button"
+                  onClick={() => fetchUsers()}
+                  className="btn btn-sm btn-outline"
+                  style={{ display: 'inline-flex', alignItems: 'center', gap: '0.3rem' }}
+                  title="Supabase DB 최신 유저 목록 새로고침"
+                >
+                  🔄 새로고침
+                </button>
+
+                <div className="toolbar-info" style={{ marginLeft: 'auto' }}>
+                  총 <strong>{filteredUsers.length}</strong>명 (👑 관리자 {displayUsers.filter((u) => u.role === 'admin').length}명 / 👤 회원 {displayUsers.filter((u) => u.role !== 'admin').length}명)
+                </div>
               </div>
 
               <div className="admin-table-responsive">
                 <table className="admin-table">
                   <thead>
                     <tr>
-                      <th style={{ width: '60px' }}>ID</th>
-                      <th style={{ width: '120px' }}>닉네임</th>
+                      <th style={{ width: '55px' }}>ID</th>
+                      <th style={{ width: '140px' }}>닉네임</th>
                       <th>이메일</th>
-                      <th style={{ width: '90px' }}>권한</th>
+                      <th style={{ width: '120px' }}>권한</th>
+                      <th style={{ width: '150px' }}>분리 DB 테이블</th>
                       <th>자기소개</th>
-                      <th style={{ width: '110px' }}>가입일</th>
-                      <th style={{ width: '100px' }}>관리</th>
+                      <th style={{ width: '105px' }}>가입일</th>
+                      <th style={{ width: '130px' }}>관리 작업</th>
                     </tr>
                   </thead>
                   <tbody>
-                    {filteredUsers.map((u) => (
-                      <tr key={u.id}>
-                        <td className="center">{u.id}</td>
-                        <td>
-                          <strong>{u.username}</strong>
-                        </td>
-                        <td>{u.email}</td>
-                        <td>
-                          <span className={`role-badge ${u.role === 'admin' ? 'admin' : 'user'}`}>
-                            {u.role === 'admin' ? '👑 최고관리자' : '일반회원'}
-                          </span>
-                        </td>
-                        <td className="text-muted">{u.bio || '-'}</td>
-                        <td>{u.joinedAt}</td>
-                        <td>
-                          {u.role !== 'admin' ? (
-                            <button
-                              onClick={() => {
-                                if (window.confirm(`회원 '${u.username}' 계정을 정말 삭제하시겠습니까?`)) {
-                                  deleteUser(u.id);
-                                }
-                              }}
-                              className="btn-table-delete"
-                            >
-                              강제탈퇴
-                            </button>
-                          ) : (
-                            <span className="badge-protected">보호됨</span>
-                          )}
+                    {filteredUsers.length === 0 ? (
+                      <tr>
+                        <td colSpan={8} style={{ textAlign: 'center', padding: '2.5rem 1rem', color: '#64748b' }}>
+                          검색 조건과 일치하는 회원이 없습니다.
                         </td>
                       </tr>
-                    ))}
+                    ) : (
+                      filteredUsers.map((u) => (
+                        <tr
+                          key={u.id}
+                          style={
+                            u.role === 'admin'
+                              ? {
+                                  backgroundColor: '#fffbeb',
+                                  borderLeft: '4px solid #f59e0b',
+                                }
+                              : {}
+                          }
+                        >
+                          <td className="center">{u.id}</td>
+                          <td>
+                            <div style={{ display: 'flex', alignItems: 'center', gap: '0.4rem', flexWrap: 'wrap' }}>
+                              <strong style={u.role === 'admin' ? { color: '#92400e' } : {}}>{u.username}</strong>
+                              {u.role === 'admin' && (
+                                <span
+                                  style={{
+                                    fontSize: '0.7rem',
+                                    padding: '0.15rem 0.4rem',
+                                    backgroundColor: '#fef3c7',
+                                    color: '#b45309',
+                                    borderRadius: '4px',
+                                    fontWeight: 700,
+                                    border: '1px solid #fde68a',
+                                  }}
+                                >
+                                  👑 관리자
+                                </span>
+                              )}
+                            </div>
+                          </td>
+                          <td>
+                            <span style={u.role === 'admin' ? { fontWeight: 600, color: '#1e293b' } : {}}>
+                              {u.email}
+                            </span>
+                          </td>
+                          <td>
+                            {u.role === 'admin' ? (
+                              <span
+                                className="role-badge admin"
+                                style={{
+                                  display: 'inline-flex',
+                                  alignItems: 'center',
+                                  gap: '0.25rem',
+                                  padding: '0.25rem 0.55rem',
+                                  fontWeight: 700,
+                                  backgroundColor: '#fef3c7',
+                                  color: '#92400e',
+                                  border: '1px solid #fde68a',
+                                  borderRadius: '6px',
+                                  fontSize: '0.8rem',
+                                }}
+                              >
+                                👑 최고관리자
+                              </span>
+                            ) : (
+                              <span className="role-badge user">일반회원</span>
+                            )}
+                          </td>
+                          <td>
+                            {/* 분리 DB 테이블 출처 표시 */}
+                            {u.role === 'admin' ? (
+                              <span
+                                style={{
+                                  display: 'inline-block',
+                                  fontSize: '0.75rem',
+                                  padding: '0.2rem 0.5rem',
+                                  borderRadius: '4px',
+                                  backgroundColor: '#fef3c7',
+                                  color: '#92400e',
+                                  fontWeight: 600,
+                                  border: '1px solid #fde68a',
+                                }}
+                              >
+                                👑 admins
+                              </span>
+                            ) : u.statusType === 'user_only' ? (
+                              <span
+                                style={{
+                                  display: 'inline-block',
+                                  fontSize: '0.75rem',
+                                  padding: '0.2rem 0.5rem',
+                                  borderRadius: '4px',
+                                  backgroundColor: '#fff1f2',
+                                  color: '#be123c',
+                                  fontWeight: 600,
+                                  border: '1px solid #fecdd3',
+                                }}
+                                title="users 테이블에만 존재 (프로필 미연동)"
+                              >
+                                👤 users 만
+                              </span>
+                            ) : u.statusType === 'profile_only' ? (
+                              <span
+                                style={{
+                                  display: 'inline-block',
+                                  fontSize: '0.75rem',
+                                  padding: '0.2rem 0.5rem',
+                                  borderRadius: '4px',
+                                  backgroundColor: '#eff6ff',
+                                  color: '#1d4ed8',
+                                  fontWeight: 600,
+                                  border: '1px solid #bfdbfe',
+                                }}
+                                title="profiles 테이블에만 존재 (계정 미연동)"
+                              >
+                                📇 profiles 만
+                              </span>
+                            ) : (
+                              <span
+                                style={{
+                                  display: 'inline-block',
+                                  fontSize: '0.75rem',
+                                  padding: '0.2rem 0.5rem',
+                                  borderRadius: '4px',
+                                  backgroundColor: '#f0fdf4',
+                                  color: '#15803d',
+                                  fontWeight: 600,
+                                  border: '1px solid #bbf7d0',
+                                }}
+                                title="users 및 profiles 테이블 연동 완료"
+                              >
+                                👥 users + profiles
+                              </span>
+                            )}
+                          </td>
+                          <td className="text-muted">{u.bio || '-'}</td>
+                          <td>{u.joinedAt}</td>
+                          <td>
+                            {u.role !== 'admin' ? (
+                              <button
+                                onClick={async () => {
+                                  if (window.confirm(`회원 '${u.username}' 계정을 정말 삭제하시겠습니까? (Supabase DB에서 영구 삭제됩니다)`)) {
+                                    await deleteUser(u.id);
+                                    await fetchUsers();
+                                  }
+                                }}
+                                className="btn-table-delete"
+                                title="회원 계정 강제 탈퇴"
+                              >
+                                강제탈퇴
+                              </button>
+                            ) : (
+                              <span
+                                style={{
+                                  display: 'inline-flex',
+                                  alignItems: 'center',
+                                  gap: '0.25rem',
+                                  fontSize: '0.8rem',
+                                  color: '#047857',
+                                  backgroundColor: '#ecfdf5',
+                                  padding: '0.25rem 0.55rem',
+                                  borderRadius: '6px',
+                                  fontWeight: 600,
+                                  border: '1px solid #a7f3d0',
+                                }}
+                              >
+                                🛡️ 보호됨 (삭제 불가)
+                              </span>
+                            )}
+                          </td>
+                        </tr>
+                      ))
+                    )}
                   </tbody>
                 </table>
               </div>
@@ -779,7 +1027,13 @@ export const AdminDashboardPage: React.FC<{ defaultCategory?: AdminCategory }> =
                                 onClick={async () => {
                                   const actionMsg = c.isHidden ? '정상 공개로 전환' : '숨김 처리';
                                   if (window.confirm(`'${c.author}'님의 댓글을 ${actionMsg}하시겠습니까?`)) {
-                                    await toggleHideComment(c.id);
+                                    const res = await toggleHideComment(c.id);
+                                    if (res.success) {
+                                      alert(res.message || `댓글이 ${actionMsg}되었습니다.`);
+                                      await fetchAdminComments();
+                                    } else {
+                                      alert(res.message || '댓글 숨김 처리에 실패했습니다.');
+                                    }
                                   }
                                 }}
                                 className={`btn-table-hide ${c.isHidden ? 'unhide' : ''}`}
@@ -789,13 +1043,19 @@ export const AdminDashboardPage: React.FC<{ defaultCategory?: AdminCategory }> =
                               </button>
                               <button
                                 type="button"
-                                onClick={() => {
+                                onClick={async () => {
                                   if (
                                     window.confirm(
-                                      `'${c.author}'님의 댓글을 영구 삭제하시겠습니까? (SQLite DB에서 완전히 삭제됩니다)`
+                                      `'${c.author}'님의 댓글을 영구 삭제하시겠습니까? (Supabase DB에서 완전히 삭제됩니다)`
                                     )
                                   ) {
-                                    deleteComment(c.id, c.postId);
+                                    const res = await deleteComment(c.id, c.postId);
+                                    if (res.success) {
+                                      alert(res.message || '댓글이 성공적으로 삭제되었습니다.');
+                                      await fetchAdminComments();
+                                    } else {
+                                      alert(res.message || '댓글 삭제에 실패했습니다.');
+                                    }
                                   }
                                 }}
                                 className="btn-table-delete"

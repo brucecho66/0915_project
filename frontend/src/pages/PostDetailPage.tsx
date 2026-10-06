@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useRef } from 'react';
+import React, { useState, useEffect } from 'react';
 import { useParams, useNavigate, Link } from 'react-router-dom';
 import { usePosts, API_BASE } from '../context/PostContext';
 import type { Post, Comment } from '../types';
@@ -9,6 +9,7 @@ export const PostDetailPage: React.FC = () => {
   const {
     getPost,
     deletePost,
+    toggleHidePost,
     reactPost,
     incrementPostView,
     user,
@@ -39,14 +40,12 @@ export const PostDetailPage: React.FC = () => {
   const [commentInput, setCommentInput] = useState('');
   const [commentAuthor, setCommentAuthor] = useState('');
   const [isSubmittingComment, setIsSubmittingComment] = useState(false);
+  const [commentSuccessMsg, setCommentSuccessMsg] = useState<string | null>(null);
 
   // 댓글 수정 모드 상태
   const [editingCommentId, setEditingCommentId] = useState<number | null>(null);
   const [editingContent, setEditingContent] = useState('');
   const [isSavingComment, setIsSavingComment] = useState(false);
-
-  // 조회수 중복 증가(2씩 증가) 방지용 Ref
-  const hasIncrementedRef = useRef<number | null>(null);
 
   // 2. 게시글 최신 정보 및 댓글 목록 로드
   useEffect(() => {
@@ -67,12 +66,17 @@ export const PostDetailPage: React.FC = () => {
 
     let isCurrent = true;
 
-    // 백엔드 API에서 최신 상세 정보 및 댓글 목록 병렬 조회
+    // 백엔드 API에서 최신 상세 정보, 댓글 목록, 조회수 갱신 병렬 실행
     const token = localStorage.getItem('user_token') || localStorage.getItem('admin_token');
     const authHeaders: Record<string, string> = token ? { Authorization: `Bearer ${token}` } : {};
 
+    const guestId = localStorage.getItem('guest_identifier') || '';
+    const currentUid = user?.id || adminUser?.id;
+    const identParam = currentUid ? `userId=${currentUid}` : (guestId ? `identifier=${guestId}` : '');
+    const postUrl = identParam ? `${API_BASE}/posts/${postId}?${identParam}` : `${API_BASE}/posts/${postId}`;
+
     Promise.all([
-      fetch(`${API_BASE}/posts/${postId}`, { headers: authHeaders }).then(async (res) => {
+      fetch(postUrl, { headers: authHeaders }).then(async (res) => {
         if (res.ok) return await res.json();
         return null;
       }),
@@ -80,11 +84,15 @@ export const PostDetailPage: React.FC = () => {
         if (res.ok) return await res.json();
         return [];
       }),
+      incrementPostView(postId),
     ])
-      .then(([postData, commentsData]) => {
+      .then(([postData, commentsData, viewCount]) => {
         if (isCurrent) {
           if (postData) {
-            setPost(postData);
+            const finalViews = typeof viewCount === 'number' && viewCount > 0
+              ? Math.max(postData.views || 0, viewCount)
+              : (postData.views || 0);
+            setPost({ ...postData, views: finalViews });
             setLikes(postData.likes || 0);
             setDislikes(postData.dislikes || 0);
             setUserReaction(postData.userReaction || null);
@@ -93,16 +101,6 @@ export const PostDetailPage: React.FC = () => {
           }
           if (commentsData) {
             setComments(commentsData);
-          }
-
-          // 로그인 유저 체크 & 로컬 스토리지 세션 확인 후 조회수 1회 증가 (중복 및 2씩 증가 방지)
-          if (hasIncrementedRef.current !== postId) {
-            hasIncrementedRef.current = postId;
-            incrementPostView(postId).then((newViews) => {
-              if (isCurrent && typeof newViews === 'number' && newViews > 0) {
-                setPost((prev) => (prev ? { ...prev, views: newViews } : prev));
-              }
-            });
           }
         }
       })
@@ -118,7 +116,7 @@ export const PostDetailPage: React.FC = () => {
     return () => {
       isCurrent = false;
     };
-  }, [id, getPost, incrementPostView]);
+  }, [id, getPost, incrementPostView, user, adminUser]);
 
   const isAuthor = Boolean(
     post &&
@@ -177,24 +175,46 @@ export const PostDetailPage: React.FC = () => {
     setLikes(result.likes);
     setDislikes(result.dislikes);
     setUserReaction(result.userReaction);
+    setPost((prev) =>
+      prev ? { ...prev, likes: result.likes, dislikes: result.dislikes, userReaction: result.userReaction } : prev
+    );
+  };
+
+  // 관리자 게시글 숨김 토글 핸들러
+  const handleToggleHidePost = async () => {
+    if (!post) return;
+    const actionName = post.isHidden ? '공개로 전환' : '숨김 처리';
+    if (!window.confirm(`이 게시글을 ${actionName}하시겠습니까?`)) return;
+
+    const result = await toggleHidePost(post.id);
+    if (result.success) {
+      setPost((prev) => (prev ? { ...prev, isHidden: result.isHidden ?? !prev.isHidden } : prev));
+      alert(result.message || `게시글이 ${actionName}되었습니다.`);
+    } else {
+      alert(result.message || '게시글 숨김 처리에 실패했습니다.');
+    }
   };
 
   const handleDelete = async () => {
     if (!post) return;
-    if (window.confirm('정말로 이 게시글을 삭제하시겠습니까? (SQLite DB에서 영구 삭제됩니다)')) {
-      await deletePost(post.id);
-      alert('게시글이 성공적으로 삭제되었습니다.');
-      if (isAdmin) {
-        navigate('/admin/posts');
+    if (window.confirm('정말로 이 게시글을 삭제하시겠습니까? (Supabase DB에서 영구 삭제됩니다)')) {
+      const result = await deletePost(post.id);
+      if (result.success) {
+        alert(result.message || '게시글이 성공적으로 삭제되었습니다.');
+        if (isAdmin) {
+          navigate('/admin/posts');
+        } else {
+          navigate('/posts');
+        }
       } else {
-        navigate('/posts');
+        alert(result.message || '게시글 삭제에 실패했습니다.');
       }
     }
   };
 
   // 댓글 등록 핸들러 (다른 유저 누구나 작성 가능)
-  const handleAddComment = async (e: React.FormEvent) => {
-    e.preventDefault();
+  const handleAddComment = async (e?: React.FormEvent) => {
+    if (e) e.preventDefault();
     if (!commentInput.trim() || !id) return;
 
     setIsSubmittingComment(true);
@@ -205,6 +225,8 @@ export const PostDetailPage: React.FC = () => {
     if (result.success && result.comment) {
       setComments((prev) => [...prev, result.comment!]);
       setCommentInput('');
+      setCommentSuccessMsg('댓글이 성공적으로 등록되었습니다! ✨');
+      setTimeout(() => setCommentSuccessMsg(null), 3500);
       if (!currentCommenterName) {
         setCommentAuthor('');
       }
@@ -250,7 +272,7 @@ export const PostDetailPage: React.FC = () => {
 
   // 댓글 삭제 핸들러 (작성 유저 또는 관리자만 가능)
   const handleDeleteComment = async (commentId: number) => {
-    if (window.confirm('이 댓글을 삭제하시겠습니까? (SQLite DB에서 영구 삭제됩니다)')) {
+    if (window.confirm('이 댓글을 삭제하시겠습니까? (Supabase DB에서 영구 삭제됩니다)')) {
       const result = await deleteComment(commentId, Number(id));
       if (result.success) {
         setComments((prev) => prev.filter((c) => c.id !== commentId));
@@ -387,37 +409,60 @@ export const PostDetailPage: React.FC = () => {
             </button>
           </div>
 
-          <div className="action-buttons-right" style={{ display: 'flex', gap: '0.5rem', alignItems: 'center' }}>
+          <div className="action-buttons-right" style={{ display: 'flex', gap: '0.5rem', alignItems: 'center', flexWrap: 'wrap' }}>
             {isAdmin && (
-              <Link
-                to="/admin/posts"
-                className="btn btn-primary"
-                style={{ display: 'inline-flex', alignItems: 'center', gap: '0.4rem', fontWeight: 600 }}
-              >
-                📝 관리자 게시글 관리
-              </Link>
+              <>
+                <button
+                  type="button"
+                  onClick={handleToggleHidePost}
+                  className="btn btn-outline"
+                  style={{
+                    display: 'inline-flex',
+                    alignItems: 'center',
+                    gap: '0.35rem',
+                    borderColor: post.isHidden ? '#16a34a' : '#d97706',
+                    color: post.isHidden ? '#16a34a' : '#d97706',
+                    fontWeight: 600,
+                  }}
+                  title={post.isHidden ? '일반 사용자에게 게시글 다시 공개' : '일반 게시판 목록에서 게시글 숨김'}
+                >
+                  {post.isHidden ? '🔓 숨김 해제' : '🔒 숨김'}
+                </button>
+                <Link
+                  to="/admin/posts"
+                  className="btn btn-primary"
+                  style={{ display: 'inline-flex', alignItems: 'center', gap: '0.4rem', fontWeight: 600 }}
+                >
+                  📝 관리자 게시글 관리
+                </Link>
+              </>
             )}
             <Link to="/posts" className="btn btn-outline">
               게시글 목록
             </Link>
             {isAuthor && (
-              <>
-                <Link
-                  to={`/posts/${post.id}/edit`}
-                  className="btn btn-outline"
-                  style={{ display: 'inline-flex', alignItems: 'center', gap: '0.3rem' }}
-                >
-                  ✏️ 수정
-                </Link>
-                <button onClick={handleDelete} className="btn btn-outline text-danger">
-                  삭제
-                </button>
-              </>
+              <Link
+                to={`/posts/${post.id}/edit`}
+                className="btn btn-outline"
+                style={{ display: 'inline-flex', alignItems: 'center', gap: '0.3rem' }}
+              >
+                ✏️ 수정
+              </Link>
+            )}
+            {(isAdmin || isAuthor) && (
+              <button
+                type="button"
+                onClick={handleDelete}
+                className="btn btn-outline text-danger"
+                style={{ display: 'inline-flex', alignItems: 'center', gap: '0.3rem', fontWeight: 600 }}
+              >
+                🗑️ 삭제
+              </button>
             )}
           </div>
         </div>
 
-        {/* Comment Section (실제 SQLite 연동: 작성, 수정, 삭제, 숨김) */}
+        {/* Comment Section (실제 Supabase 연동: 작성, 수정, 삭제, 숨김) */}
         <section className="comments-section" style={{ marginTop: '2.5rem' }}>
           <div
             style={{
@@ -437,6 +482,29 @@ export const PostDetailPage: React.FC = () => {
               댓글은 작성한 회원만 수정/삭제할 수 있으며, 관리자는 숨김/삭제가 가능합니다.
             </span>
           </div>
+
+          {/* 댓글 등록 성공 피드백 알림 */}
+          {commentSuccessMsg && (
+            <div
+              style={{
+                padding: '0.75rem 1.25rem',
+                marginBottom: '1rem',
+                backgroundColor: '#f0fdf4',
+                border: '1px solid #86efac',
+                borderRadius: '8px',
+                color: '#15803d',
+                fontSize: '0.95rem',
+                fontWeight: 600,
+                display: 'flex',
+                alignItems: 'center',
+                gap: '0.5rem',
+                animation: 'fadeIn 0.2s ease',
+              }}
+            >
+              <span>✅</span>
+              <span>{commentSuccessMsg}</span>
+            </div>
+          )}
 
           {/* 댓글 작성 폼 (누구나 작성 가능) */}
           <form
@@ -494,18 +562,29 @@ export const PostDetailPage: React.FC = () => {
                   </div>
                 )}
               </div>
-              <span style={{ fontSize: '0.8rem', color: '#94a3b8' }}>{commentInput.length}자</span>
+              <div style={{ display: 'flex', alignItems: 'center', gap: '0.75rem' }}>
+                <span style={{ fontSize: '0.75rem', color: '#94a3b8' }}>💡 Ctrl + Enter로 즉시 등록</span>
+                <span style={{ fontSize: '0.8rem', color: '#94a3b8' }}>{commentInput.length}자</span>
+              </div>
             </div>
 
             <div style={{ display: 'flex', gap: '0.5rem', alignItems: 'flex-start' }}>
               <textarea
                 placeholder={
                   currentCommenterName
-                    ? `${currentCommenterName}님, 의견이나 피드백을 자유롭게 남겨보세요.`
-                    : '자유롭게 댓글을 입력해 보세요...'
+                    ? `${currentCommenterName}님, 의견이나 피드백을 자유롭게 남겨보세요. (Ctrl + Enter로 등록)`
+                    : '자유롭게 댓글을 입력해 보세요... (Ctrl + Enter로 등록)'
                 }
                 value={commentInput}
                 onChange={(e) => setCommentInput(e.target.value)}
+                onKeyDown={(e) => {
+                  if ((e.ctrlKey || e.metaKey) && e.key === 'Enter') {
+                    e.preventDefault();
+                    if (!isSubmittingComment && commentInput.trim()) {
+                      handleAddComment();
+                    }
+                  }
+                }}
                 required
                 rows={2}
                 style={{

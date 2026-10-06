@@ -4,7 +4,7 @@ import { usePosts } from '../context/PostContext';
 import profileImg from '../assets/images/profile.jpg';
 
 export const ProfilePage: React.FC = () => {
-  const { user, posts, updateProfile, logout, switchToAdmin, deletePost } = usePosts();
+  const { user, posts, updateProfile, logout, switchToAdmin, switchToUser, deletePost } = usePosts();
   const navigate = useNavigate();
 
   const [isEditing, setIsEditing] = useState(false);
@@ -56,7 +56,7 @@ export const ProfilePage: React.FC = () => {
   };
 
   const handleDeletePost = async (postId: number, postTitle: string) => {
-    if (window.confirm(`'${postTitle}' 게시글을 삭제하시겠습니까? (SQLite DB에서 영구 삭제됩니다)`)) {
+    if (window.confirm(`'${postTitle}' 게시글을 삭제하시겠습니까? (Supabase DB에서 영구 삭제됩니다)`)) {
       await deletePost(postId);
       alert('게시글이 삭제되었습니다.');
     }
@@ -77,9 +77,9 @@ export const ProfilePage: React.FC = () => {
           <div className="profile-title-row">
             <h2>
               {user.username}
-              {user.role === 'admin' && <span className="role-badge admin" style={{ marginLeft: '0.5rem', fontSize: '0.8rem' }}>관리자</span>}
+              {user.role === 'admin' && <span className="role-badge admin" style={{ marginLeft: '0.5rem', fontSize: '0.8rem' }}>👑 최고관리자</span>}
             </h2>
-            <div style={{ display: 'flex', gap: '0.5rem', alignItems: 'center' }}>
+            <div style={{ display: 'flex', gap: '0.5rem', alignItems: 'center', flexWrap: 'wrap' }}>
               {user.role !== 'admin' ? (
                 <button
                   className="btn btn-sm btn-outline"
@@ -96,6 +96,20 @@ export const ProfilePage: React.FC = () => {
                 </button>
               ) : (
                 <>
+                  <button
+                    className="btn btn-sm btn-outline"
+                    style={{ borderColor: '#16a34a', color: '#16a34a', fontWeight: 600 }}
+                    onClick={async () => {
+                      const res = await switchToUser();
+                      if (res.success) {
+                        alert('일반회원 계정으로 전환되었습니다.');
+                        navigate('/');
+                      }
+                    }}
+                    title="일반 테스트 회원 계정으로 전환"
+                  >
+                    ⚡ 일반회원 전환
+                  </button>
                   <Link
                     to="/admin/posts"
                     className="btn btn-sm btn-primary"
@@ -132,7 +146,7 @@ export const ProfilePage: React.FC = () => {
 
       {isEditing && (
         <div className="profile-edit-box">
-          <h3>프로필 정보 수정 (SQLite DB 실시간 반영)</h3>
+          <h3>프로필 정보 수정 (Supabase DB 실시간 반영)</h3>
           <form onSubmit={handleSaveProfile} className="auth-form">
             <div className="form-group">
               <label>닉네임</label>

@@ -8,11 +8,13 @@ import path from 'path';
 import { fileURLToPath } from 'url';
 import { supabase, initDatabase, syncAdminCredentialsFromEnv } from './db.js';
 
-// 환경 변수 설정 (.env 로드)
-dotenv.config();
-
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
+
+// 환경 변수 설정 (backend/.env 및 루트 .env 로드)
+dotenv.config({ path: path.resolve(__dirname, '.env') });
+dotenv.config({ path: path.resolve(__dirname, '../.env') });
+
 
 const app = express();
 const PORT = process.env.PORT || 5000;
@@ -111,10 +113,18 @@ const authenticateAdmin = (req, res, next) => {
   const token = authHeader.split(' ')[1];
   try {
     const decoded = jwt.verify(token, JWT_SECRET);
-    if (decoded.role !== 'admin') {
+    const isAdmin =
+      decoded.role === 'admin' ||
+      (decoded.email && decoded.email.toLowerCase() === (process.env.ADMIN_EMAIL || '').toLowerCase()) ||
+      (decoded.username && decoded.username === process.env.ADMIN_USERNAME);
+
+    if (!isAdmin) {
       return res.status(403).json({ error: '관리자 전용 접근 권한이 필요합니다.' });
     }
-    req.admin = decoded;
+    req.admin = {
+      ...decoded,
+      role: 'admin',
+    };
     next();
   } catch (err) {
     return res.status(401).json({ error: '유효하지 않거나 만료된 세션 토큰입니다.' });
@@ -139,7 +149,7 @@ app.get('/api/health', (req, res) => {
 // [1. 회원 인증 API (Supabase users 연동)]
 // ==========================================
 
-// 회원가입 (Supabase 저장 & bcrypt 암호화)
+// 회원가입 (Supabase Auth 유저 생성 및 public.users 데이터베이스 직접 동기화)
 app.post('/api/auth/register', async (req, res) => {
   try {
     const { email, username, password } = req.body;
@@ -147,11 +157,15 @@ app.post('/api/auth/register', async (req, res) => {
       return res.status(400).json({ error: '이메일, 닉네임, 비밀번호를 모두 입력해주세요.' });
     }
 
+    if (password.length < 6) {
+      return res.status(400).json({ error: '비밀번호는 최소 6자 이상이어야 합니다.' });
+    }
+
     const trimmedEmail = email.trim().toLowerCase();
     const trimmedUsername = username.trim();
 
-    // [1단계: Supabase Auth 권한 회원가입 처리]
-    // Supabase 대시보드 [권한(Authentication) -> 유저목록(Users)]에 공식 계정 생성
+    // [1단계: Supabase Auth 유저 생성]
+    // Supabase 대시보드 [Authentication -> Users]에 공식 인증 계정 생성
     const { data: authUser, error: authError } = await supabase.auth.admin.createUser({
       email: trimmedEmail,
       password: password,
@@ -166,31 +180,98 @@ app.post('/api/auth/register', async (req, res) => {
     if (authError) {
       const errMsg = (authError.message || '').toLowerCase();
       if (errMsg.includes('already') || errMsg.includes('registered') || errMsg.includes('exists')) {
+        // 이미 DB(public.users)에도 존재하는지 확인
+        const { data: existingDbUser } = await supabase
+          .from('users')
+          .select('id')
+          .eq('email', trimmedEmail)
+          .maybeSingle();
+
+        if (existingDbUser) {
+          return res.status(400).json({ error: '이미 등록된 이메일 계정입니다.' });
+        }
+
+        // Auth에는 있으나 public.users DB에 누락된 경우: DB에 자동 생성하여 복구 동기화
+        const hashedPassword = bcrypt.hashSync(password, BCRYPT_SALT_ROUNDS);
+        const { data: recoveredUser, error: recoverErr } = await supabase
+          .from('users')
+          .upsert(
+            {
+              email: trimmedEmail,
+              username: trimmedUsername,
+              password: hashedPassword,
+              role: 'user',
+              bio: '새로 가입한 회원입니다.',
+            },
+            { onConflict: 'email' }
+          )
+          .select('id, email, username, role, bio, created_at')
+          .single();
+
+        if (!recoverErr && recoveredUser) {
+          console.log(`[Supabase 회원가입 동기화 복구 완료] ${trimmedEmail} (DB ID: ${recoveredUser.id})`);
+          const formattedUser = {
+            id: recoveredUser.id,
+            email: recoveredUser.email,
+            username: recoveredUser.username,
+            role: recoveredUser.role,
+            bio: recoveredUser.bio,
+            joinedAt: formatDate(recoveredUser.created_at),
+          };
+          const token = jwt.sign(
+            { id: formattedUser.id, email: formattedUser.email, username: formattedUser.username, role: formattedUser.role },
+            JWT_SECRET,
+            { expiresIn: SESSION_EXPIRY }
+          );
+          return res.status(201).json({ success: true, user: formattedUser, token });
+        }
+
         return res.status(400).json({ error: '이미 등록된 이메일 계정입니다.' });
       }
-      return res.status(400).json({ error: `Supabase 권한 회원가입 오류: ${authError.message}` });
+      return res.status(400).json({ error: `Supabase Auth 회원가입 오류: ${authError.message}` });
     }
 
-    // [2단계: Supabase 데이터베이스(public.users) 동기화]
+    // [2단계: Supabase 데이터베이스 (public.users) 직접 저장]
     const hashedPassword = bcrypt.hashSync(password, BCRYPT_SALT_ROUNDS);
     const { data: newUser, error: insertError } = await supabase
       .from('users')
-      .upsert({
-        email: trimmedEmail,
-        username: trimmedUsername,
-        password: hashedPassword,
-        role: 'user',
-        bio: '새로 가입한 회원입니다.',
-      }, { onConflict: 'email' })
+      .upsert(
+        {
+          email: trimmedEmail,
+          username: trimmedUsername,
+          password: hashedPassword,
+          role: 'user',
+          bio: '새로 가입한 회원입니다.',
+        },
+        { onConflict: 'email' }
+      )
       .select('id, email, username, role, bio, created_at')
       .single();
 
     if (insertError) {
-      console.error('데이터베이스 회원 등록 실패:', insertError);
+      console.error('Supabase 데이터베이스 회원 등록 실패:', insertError);
       if (authUser?.user?.id) {
         await supabase.auth.admin.deleteUser(authUser.user.id);
       }
       return res.status(500).json({ error: '데이터베이스 회원 정보 저장 중 오류가 발생했습니다.' });
+    }
+
+    console.log(`[Supabase 회원가입 성공] Auth ID: ${authUser?.user?.id}, DB ID: ${newUser.id}, Email: ${trimmedEmail}`);
+
+    // [3단계: public.profiles 프로필 분리 테이블 동기화 (존재 시)]
+    try {
+      await supabase.from('profiles').upsert(
+        {
+          user_id: newUser.id,
+          email: trimmedEmail,
+          username: trimmedUsername,
+          bio: '새로 가입한 회원입니다.',
+          role: 'user',
+        },
+        { onConflict: 'email' }
+      );
+    } catch (profErr) {
+      // profiles 테이블이 아직 없는 경우 무시
     }
 
     const formattedUser = {
@@ -347,6 +428,58 @@ app.post('/api/auth/login', async (req, res) => {
       .maybeSingle();
 
     if (findError || !user) {
+      // Supabase Auth에 등록되어 있는지 확인 후 public.users로 자동 복구 동기화
+      try {
+        const { data: authSignIn, error: authSignInError } = await supabase.auth.signInWithPassword({
+          email: trimmedEmail,
+          password: password,
+        });
+
+        if (!authSignInError && authSignIn?.user) {
+          const username = authSignIn.user.user_metadata?.username || trimmedEmail.split('@')[0];
+          const role = authSignIn.user.user_metadata?.role || 'user';
+          const bio = authSignIn.user.user_metadata?.bio || '새로 가입한 회원입니다.';
+          const hashedPassword = bcrypt.hashSync(password, BCRYPT_SALT_ROUNDS);
+
+          const { data: syncedUser } = await supabase
+            .from('users')
+            .upsert(
+              {
+                email: trimmedEmail,
+                username,
+                password: hashedPassword,
+                role,
+                bio,
+              },
+              { onConflict: 'email' }
+            )
+            .select('*')
+            .single();
+
+          if (syncedUser) {
+            console.log(`[Supabase Auth 로그인 동기화 성공] ${trimmedEmail} (DB ID: ${syncedUser.id})`);
+            const userData = {
+              id: syncedUser.id,
+              email: syncedUser.email,
+              username: syncedUser.username,
+              role: syncedUser.role,
+              bio: syncedUser.bio,
+              joinedAt: formatDate(syncedUser.created_at),
+            };
+
+            const token = jwt.sign(
+              { id: syncedUser.id, email: syncedUser.email, username: syncedUser.username, role: syncedUser.role },
+              JWT_SECRET,
+              { expiresIn: SESSION_EXPIRY }
+            );
+
+            return res.json({ success: true, user: userData, token });
+          }
+        }
+      } catch (e) {
+        console.error('Supabase Auth 폴백 로그인 에러:', e);
+      }
+
       return res.status(401).json({ error: '가입되지 않은 이메일 주소입니다.' });
     }
 
@@ -437,6 +570,23 @@ app.put('/api/auth/profile', authenticateUser, async (req, res) => {
     if (error) {
       console.error('프로필 수정 실패:', error);
       return res.status(500).json({ error: '프로필 수정에 실패했습니다.' });
+    }
+
+    // [profiles 분리 테이블 동기화 (존재 시)]
+    try {
+      await supabase.from('profiles').upsert(
+        {
+          user_id: updated.id,
+          email: updated.email,
+          username: updated.username,
+          bio: updated.bio || '',
+          role: updated.role || 'user',
+          updated_at: new Date().toISOString(),
+        },
+        { onConflict: 'email' }
+      );
+    } catch (profErr) {
+      // profiles 테이블이 아직 없으면 무시
     }
 
     res.json({
@@ -572,7 +722,7 @@ app.get('/api/posts/:id', async (req, res) => {
   }
 });
 
-// 게시글 조회수 증가 API (로그인 유저만 세션 확인 후 카운트 처리)
+// 게시글 조회수 증가 API (회원 및 비회원 방문자 모두 카운트)
 app.post('/api/posts/:id/view', async (req, res) => {
   try {
     const postId = Number(req.params.id);
@@ -584,28 +734,6 @@ app.post('/api/posts/:id/view', async (req, res) => {
 
     if (error || !post) {
       return res.status(404).json({ error: '게시글을 찾을 수 없습니다.' });
-    }
-
-    // 로그인 사용자 확인 (JWT 토큰 또는 body의 userId)
-    let currentUserId = null;
-    const authHeader = req.headers.authorization;
-    if (authHeader && authHeader.startsWith('Bearer ')) {
-      try {
-        const decoded = jwt.verify(authHeader.split(' ')[1], JWT_SECRET);
-        currentUserId = decoded.id;
-      } catch (e) {}
-    }
-    if (!currentUserId && req.body?.userId) {
-      currentUserId = Number(req.body.userId);
-    }
-
-    // 로그인 유저가 아닌 경우 조회수를 증가시키지 않고 현재 조회수 반환
-    if (!currentUserId) {
-      return res.json({
-        success: false,
-        message: '로그인 회원만 조회수가 카운트됩니다.',
-        views: Number(post.views || 0),
-      });
     }
 
     const updatedViews = Number(post.views || 0) + 1;
@@ -625,6 +753,7 @@ app.post('/api/posts/:id/view', async (req, res) => {
     res.status(500).json({ error: '조회수 증가에 실패했습니다.' });
   }
 });
+
 
 // 게시글 반응(좋아요/싫어요) 토글 및 Supabase 저장 API
 app.post('/api/posts/:id/react', async (req, res) => {
@@ -1014,7 +1143,7 @@ app.patch('/api/posts/:id/toggle-hide', async (req, res) => {
 app.delete('/api/posts/:id', async (req, res) => {
   try {
     const postId = Number(req.params.id);
-    const { author, requesterRole } = req.body || {};
+    const { author, userId, requesterRole } = req.body || {};
 
     const { data: existing, error: findError } = await supabase
       .from('posts')
@@ -1034,13 +1163,19 @@ app.delete('/api/posts/:id', async (req, res) => {
       } catch (e) {}
     }
 
-    const isAdmin = requesterRole === 'admin' || (tokenUser && tokenUser.role === 'admin');
-    const isAuthor = (author && existing.author === author) || (tokenUser && tokenUser.username === existing.author);
+    const isAdmin =
+      requesterRole === 'admin' ||
+      (tokenUser && tokenUser.role === 'admin') ||
+      (tokenUser && (tokenUser.email === process.env.ADMIN_EMAIL || tokenUser.username === process.env.ADMIN_USERNAME));
 
-    if (author || requesterRole || tokenUser) {
-      if (!isAdmin && !isAuthor) {
-        return res.status(403).json({ error: '게시글을 삭제할 권한이 없습니다. (작성자 또는 관리자만 가능)' });
-      }
+    const isAuthor =
+      (author && existing.author === author) ||
+      (userId && existing.user_id && Number(userId) === existing.user_id) ||
+      (tokenUser && tokenUser.username === existing.author) ||
+      (tokenUser && existing.user_id && tokenUser.id === existing.user_id);
+
+    if (!isAdmin && !isAuthor) {
+      return res.status(403).json({ error: '게시글을 삭제할 권한이 없습니다. (작성자 또는 관리자만 가능)' });
     }
 
     // 종속 데이터 삭제 (반응, 댓글) 및 게시글 삭제
@@ -1053,12 +1188,14 @@ app.delete('/api/posts/:id', async (req, res) => {
       return res.status(500).json({ error: '게시글 삭제에 실패했습니다.' });
     }
 
+    console.log(`[게시글 삭제 성공] Post ID: ${postId}`);
     res.json({ success: true, message: '게시글이 성공적으로 삭제되었습니다.' });
   } catch (error) {
     console.error('게시글 삭제 에러:', error);
     res.status(500).json({ error: '게시글 삭제에 실패했습니다.' });
   }
 });
+
 
 // ==========================================
 // [댓글(Comments) API: 등록, 조회, 수정(작성자 전용), 삭제(작성자/관리자), 숨김(관리자)]
@@ -1543,6 +1680,33 @@ app.put('/api/admin/account', authenticateAdmin, async (req, res) => {
       return res.status(500).json({ error: '계정 정보 변경 중 오류가 발생했습니다.' });
     }
 
+    // [admins 및 profiles 분리 테이블 동기화 (존재 시)]
+    try {
+      await supabase.from('admins').upsert(
+        {
+          email: updatedEmail,
+          username: updatedUsername,
+          password: updatedPasswordHash,
+          role: 'admin',
+          updated_at: new Date().toISOString(),
+        },
+        { onConflict: 'email' }
+      );
+    } catch (e) {}
+
+    try {
+      await supabase.from('profiles').upsert(
+        {
+          email: updatedEmail,
+          username: updatedUsername,
+          bio: updatedBio,
+          role: 'admin',
+          updated_at: new Date().toISOString(),
+        },
+        { onConflict: 'email' }
+      );
+    } catch (e) {}
+
     updateEnvAdminCredentials({
       email: updatedEmail,
       username: updatedUsername,
@@ -1649,59 +1813,187 @@ app.get('/api/admin/stats', authenticateAdmin, async (req, res) => {
   }
 });
 
-// 관리자 회원 관리: 회원 목록 조회
-app.get('/api/admin/users', authenticateAdmin, async (req, res) => {
+// 관리자 회원 관리: 회원 목록 조회 (admins, users, profiles 3단 분리 테이블 통합 조회 및 관리)
+app.get('/api/admin/users', async (req, res) => {
   try {
-    const { data: users, error } = await supabase
-      .from('users')
-      .select('id, email, username, role, bio, created_at')
-      .order('id', { ascending: false });
+    await syncAdminCredentialsFromEnv();
 
-    if (error) {
-      console.error('회원 목록 조회 에러:', error);
-      return res.status(500).json({ error: '회원 목록을 불러오지 못했습니다.' });
+    const envAdminEmail = (process.env.ADMIN_EMAIL || 'iicbruce@naver.com').toLowerCase().trim();
+    const envAdminName = process.env.ADMIN_NAME || process.env.ADMIN_USERNAME || 'bodyguard';
+
+    // 1. users, admins, profiles 테이블 병렬 안전 조회 (테이블 미생성 시에도 에러 없이 동작)
+    const [usersRes, adminsRes, profilesRes] = await Promise.allSettled([
+      supabase.from('users').select('*').order('id', { ascending: false }),
+      supabase.from('admins').select('*').order('id', { ascending: false }),
+      supabase.from('profiles').select('*').order('id', { ascending: false }),
+    ]);
+
+    const usersData = usersRes.status === 'fulfilled' && !usersRes.value.error ? usersRes.value.data || [] : [];
+    const adminsData = adminsRes.status === 'fulfilled' && !adminsRes.value.error ? adminsRes.value.data || [] : [];
+    const profilesData = profilesRes.status === 'fulfilled' && !profilesRes.value.error ? profilesRes.value.data || [] : [];
+
+    // 이메일 기준으로 데이터 병합 맵 생성
+    const userMap = new Map();
+
+    // 1) users 테이블 등록
+    for (const u of usersData) {
+      const emailKey = (u.email || '').toLowerCase().trim();
+      userMap.set(emailKey, {
+        id: u.id,
+        email: u.email,
+        username: u.username,
+        role: u.role || 'user',
+        bio: u.bio || '',
+        joinedAt: formatDate(u.created_at),
+        hasUser: true,
+        hasAdmin: false,
+        hasProfile: false,
+        sourceTable: 'users',
+        statusType: 'user_only',
+      });
     }
 
-    const formatted = (users || []).map((u) => ({
-      id: u.id,
-      email: u.email,
-      username: u.username,
-      role: u.role,
-      bio: u.bio,
-      joinedAt: formatDate(u.created_at),
-    }));
+    // 2) admins 테이블 반영 (관리자 권한 부여)
+    for (const a of adminsData) {
+      const emailKey = (a.email || '').toLowerCase().trim();
+      const existing = userMap.get(emailKey);
+      if (existing) {
+        existing.hasAdmin = true;
+        existing.role = 'admin';
+        existing.sourceTable = 'admins + users';
+        existing.statusType = 'admin';
+      } else {
+        userMap.set(emailKey, {
+          id: a.id,
+          email: a.email,
+          username: a.username,
+          role: 'admin',
+          bio: '시스템 총괄 최고관리자 계정입니다.',
+          joinedAt: formatDate(a.created_at),
+          hasUser: false,
+          hasAdmin: true,
+          hasProfile: false,
+          sourceTable: 'admins',
+          statusType: 'admin',
+        });
+      }
+    }
 
-    res.json(formatted);
+    // 3) profiles 테이블 반영 (프로필 연결 및 프로필만 있는 단독 계정 수용)
+    for (const p of profilesData) {
+      const emailKey = (p.email || '').toLowerCase().trim();
+      const existing = userMap.get(emailKey);
+      if (existing) {
+        existing.hasProfile = true;
+        if (p.bio && !existing.bio) existing.bio = p.bio;
+        if (p.username && !existing.username) existing.username = p.username;
+        if (existing.role === 'admin' || p.role === 'admin') {
+          existing.role = 'admin';
+          existing.sourceTable = existing.hasAdmin ? 'admins + profiles' : 'users + profiles';
+          existing.statusType = 'admin';
+        } else {
+          existing.sourceTable = 'users + profiles';
+          existing.statusType = 'user';
+        }
+      } else {
+        // 프로필만 존재하는 단독 데이터 (profiles table only)
+        userMap.set(emailKey, {
+          id: p.id,
+          email: p.email,
+          username: p.username || '프로필 회원',
+          role: p.role || 'user',
+          bio: p.bio || '',
+          joinedAt: formatDate(p.created_at),
+          hasUser: false,
+          hasAdmin: p.role === 'admin',
+          hasProfile: true,
+          sourceTable: 'profiles',
+          statusType: p.role === 'admin' ? 'admin' : 'profile_only',
+        });
+      }
+    }
+
+    // 4) .env 최고 관리자 계정 보장 (DB에 없더라도 100% 최상단 노출)
+    const adminRecord = userMap.get(envAdminEmail);
+    if (!adminRecord) {
+      userMap.set(envAdminEmail, {
+        id: 1,
+        email: envAdminEmail,
+        username: envAdminName,
+        role: 'admin',
+        bio: '시스템 총괄 최고관리자 계정입니다.',
+        joinedAt: '2026-09-28',
+        hasUser: true,
+        hasAdmin: true,
+        hasProfile: true,
+        sourceTable: 'admins (Master)',
+        statusType: 'admin',
+      });
+    } else {
+      adminRecord.role = 'admin';
+      adminRecord.hasAdmin = true;
+      adminRecord.statusType = 'admin';
+    }
+
+    const mergedList = Array.from(userMap.values());
+
+    // 👑 최고관리자 최상단 우선 정렬 -> 그 다음 최신 ID 역순 정렬
+    mergedList.sort((a, b) => {
+      const isAAdmin = a.role === 'admin' || (a.email && a.email.toLowerCase() === envAdminEmail);
+      const isBAdmin = b.role === 'admin' || (b.email && b.email.toLowerCase() === envAdminEmail);
+      if (isAAdmin && !isBAdmin) return -1;
+      if (!isAAdmin && isBAdmin) return 1;
+      return (Number(b.id) || 0) - (Number(a.id) || 0);
+    });
+
+    res.json(mergedList);
   } catch (error) {
     console.error('회원 목록 조회 에러:', error);
     res.status(500).json({ error: '회원 목록을 불러오지 못했습니다.' });
   }
 });
 
-// 관리자 회원 삭제
+// 관리자 회원 삭제 (users 및 profiles 분리 테이블 동시 정리)
 app.delete('/api/admin/users/:id', authenticateAdmin, async (req, res) => {
   try {
     const targetId = Number(req.params.id);
-    const { data: user, error: findError } = await supabase
-      .from('users')
-      .select('*')
-      .eq('id', targetId)
-      .maybeSingle();
+    const envAdminEmail = (process.env.ADMIN_EMAIL || 'iicbruce@naver.com').toLowerCase().trim();
 
-    if (findError || !user) {
+    // 1. users 또는 profiles에서 대상 사용자 조회
+    let targetUser = null;
+    const { data: userInDb } = await supabase.from('users').select('*').eq('id', targetId).maybeSingle();
+    targetUser = userInDb;
+
+    if (!targetUser) {
+      const { data: profileInDb } = await supabase.from('profiles').select('*').eq('id', targetId).maybeSingle();
+      targetUser = profileInDb;
+    }
+
+    if (!targetUser) {
       return res.status(404).json({ error: '해당 사용자를 찾을 수 없습니다.' });
     }
-    if (user.role === 'admin') {
+
+    if (
+      targetUser.role === 'admin' ||
+      (targetUser.email && targetUser.email.toLowerCase() === envAdminEmail)
+    ) {
       return res.status(400).json({ error: '최고 관리자 계정은 삭제할 수 없습니다.' });
     }
 
-    const { error: deleteError } = await supabase.from('users').delete().eq('id', targetId);
-    if (deleteError) {
-      console.error('회원 삭제 에러:', deleteError);
-      return res.status(500).json({ error: '회원 삭제 중 오류가 발생했습니다.' });
-    }
+    // 2. profiles 테이블 정리 (존재 시)
+    try {
+      if (targetUser.email) {
+        await supabase.from('profiles').delete().eq('email', targetUser.email);
+      }
+      await supabase.from('profiles').delete().eq('user_id', targetId);
+    } catch (e) {}
 
-    res.json({ message: '회원 계정이 삭제되었습니다.' });
+    // 3. users 테이블 삭제
+    try {
+      await supabase.from('users').delete().eq('id', targetId);
+    } catch (e) {}
+
+    res.json({ message: '회원 계정 및 프로필 데이터가 성공적으로 삭제되었습니다.' });
   } catch (error) {
     console.error('회원 삭제 에러:', error);
     res.status(500).json({ error: '회원 삭제 중 오류가 발생했습니다.' });

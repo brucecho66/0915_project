@@ -21,6 +21,11 @@ export interface User {
   role?: 'admin' | 'user';
   bio?: string;
   joinedAt: string;
+  hasUser?: boolean;
+  hasAdmin?: boolean;
+  hasProfile?: boolean;
+  sourceTable?: string;
+  statusType?: 'all' | 'admin' | 'user' | 'user_only' | 'profile_only';
 }
 
 export interface Comment {

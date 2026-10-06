@@ -31,7 +31,7 @@ interface PostContextType {
   toggleHidePost: (id: number) => Promise<{ success: boolean; isHidden?: boolean; message?: string }>;
   getPost: (id: number) => Post | undefined;
   incrementPostView: (id: number) => Promise<number>;
-  deletePost: (id: number) => Promise<void>;
+  deletePost: (id: number) => Promise<{ success: boolean; message?: string }>;
   deleteUser: (id: number) => Promise<void>;
   addComment: (postId: number, content: string, author?: string) => Promise<{ success: boolean; comment?: Comment; message?: string }>;
   updateComment: (id: number, content: string) => Promise<{ success: boolean; comment?: Comment; message?: string }>;
@@ -147,7 +147,7 @@ export const PostProvider: React.FC<{ children: React.ReactNode }> = ({ children
   // [1. 게시글 실제 DB API 연동]
   // ==========================================
 
-  // 게시글 목록 가져오기 (실제 SQLite DB)
+  // 게시글 목록 가져오기 (실제 Supabase DB)
   const fetchPosts = useCallback(async () => {
     setIsLoadingPosts(true);
     try {
@@ -167,7 +167,7 @@ export const PostProvider: React.FC<{ children: React.ReactNode }> = ({ children
     fetchPosts();
   }, [fetchPosts]);
 
-  // 새 게시글 등록 (실제 SQLite DB 저장)
+  // 새 게시글 등록 (실제 Supabase DB 저장)
   const addPost = async (title: string, content: string, author = user?.username || '익명'): Promise<number> => {
     try {
       const res = await fetch(`${API_BASE}/posts`, {
@@ -196,20 +196,23 @@ export const PostProvider: React.FC<{ children: React.ReactNode }> = ({ children
     return posts.find((p) => p.id === id);
   };
 
-  // 로그인 유저 체크 & 로컬 스토리지 세션 확인 후 조회수 1회 증가
-  const incrementPostView = async (id: number): Promise<number> => {
-    // 1. 로그인 유저 여부 체크 (로그인 회원만 조회수 카운트)
-    const currentUid = user?.id || adminUser?.id;
-    if (!currentUid) {
-      const current = posts.find((p) => p.id === id);
-      return current?.views || 0;
+  // 클라이언트 게스트 고유 식별자 헬퍼 (비회원 추천 및 조회 상태 추적용)
+  const getGuestIdentifier = () => {
+    let guestId = localStorage.getItem('guest_identifier');
+    if (!guestId) {
+      guestId = 'guest_' + Math.random().toString(36).substring(2, 10) + '_' + Date.now().toString(36);
+      localStorage.setItem('guest_identifier', guestId);
     }
+    return guestId;
+  };
 
-    // 2. 로컬 스토리지에서 해당 유저의 조회 기록 확인
-    const storageKey = `viewed_posts_user_${currentUid}`;
+  // 게시글 조회수 1회 증가 (회원 및 비회원 방문자 모두 카운트, 세션 기반 새로고침 연타 방지)
+  const incrementPostView = async (id: number): Promise<number> => {
+    // 세션 스토리지 기반 조회수 중복 방지 (현재 탭/세션 내에서는 중복 폭증 방지)
+    const storageKey = 'viewed_posts_session';
     let viewedList: number[] = [];
     try {
-      const saved = localStorage.getItem(storageKey);
+      const saved = sessionStorage.getItem(storageKey);
       if (saved) {
         viewedList = JSON.parse(saved);
       }
@@ -217,18 +220,18 @@ export const PostProvider: React.FC<{ children: React.ReactNode }> = ({ children
       viewedList = [];
     }
 
-    // 이미 해당 유저가 조회한 게시글이면 중복 증가하지 않고 현재 조회수 반환
     if (viewedList.includes(id)) {
       const current = posts.find((p) => p.id === id);
       return current?.views || 0;
     }
 
-    // 3. 신규 조회: 로컬 스토리지에 즉시 기록하여 중복 호출 차단
     viewedList.push(id);
-    localStorage.setItem(storageKey, JSON.stringify(viewedList));
-
-    // 4. 백엔드 조회수 1 증가 API 호출 (로그인 유저 ID 전달)
     try {
+      sessionStorage.setItem(storageKey, JSON.stringify(viewedList));
+    } catch (e) {}
+
+    try {
+      const currentUid = user?.id || adminUser?.id;
       const token = userToken || adminToken || localStorage.getItem('user_token') || localStorage.getItem('admin_token');
       const res = await fetch(`${API_BASE}/posts/${id}/view`, {
         method: 'POST',
@@ -236,7 +239,7 @@ export const PostProvider: React.FC<{ children: React.ReactNode }> = ({ children
           'Content-Type': 'application/json',
           ...(token ? { Authorization: `Bearer ${token}` } : {}),
         },
-        body: JSON.stringify({ userId: currentUid }),
+        body: JSON.stringify({ userId: currentUid || null }),
       });
 
       if (res.ok) {
@@ -257,10 +260,16 @@ export const PostProvider: React.FC<{ children: React.ReactNode }> = ({ children
     return current?.views || 0;
   };
 
-  // 게시글 상세 조회 및 조회수/댓글수 동기화 (SQLite DB 실시간 반영)
+  // 게시글 상세 조회 및 조회수/댓글수 동기화 (실제 DB 실시간 반영)
   const fetchPostDetail = useCallback(async (id: number): Promise<Post | undefined> => {
     try {
-      const res = await fetch(`${API_BASE}/posts/${id}`);
+      const currentUid = user?.id || adminUser?.id;
+      const guestId = getGuestIdentifier();
+      const queryParam = currentUid ? `userId=${currentUid}` : `identifier=${guestId}`;
+      const token = userToken || adminToken || localStorage.getItem('user_token') || localStorage.getItem('admin_token');
+      const res = await fetch(`${API_BASE}/posts/${id}?${queryParam}`, {
+        headers: token ? { Authorization: `Bearer ${token}` } : {},
+      });
       if (res.ok) {
         const postData: Post = await res.json();
         // 전체 posts 상태의 views 및 commentCount 즉시 동기화
@@ -277,9 +286,10 @@ export const PostProvider: React.FC<{ children: React.ReactNode }> = ({ children
       console.error('게시글 상세 조회 실패:', err);
     }
     return undefined;
-  }, []);
+  }, [user, adminUser, userToken, adminToken]);
 
-  // 게시글 수정 (실제 SQLite DB UPDATE)
+
+  // 게시글 수정 (실제 Supabase DB UPDATE)
   const updatePost = async (
     id: number,
     title: string,
@@ -314,7 +324,7 @@ export const PostProvider: React.FC<{ children: React.ReactNode }> = ({ children
     }
   };
 
-  // 게시글 숨김/해제 토글 (관리자 권한으로 SQLite DB 갱신)
+  // 게시글 숨김/해제 토글 (관리자 권한으로 Supabase DB 갱신)
   const toggleHidePost = async (id: number): Promise<{ success: boolean; isHidden?: boolean; message?: string }> => {
     try {
       const token = adminToken || userToken || localStorage.getItem('admin_token') || localStorage.getItem('user_token');
@@ -339,10 +349,14 @@ export const PostProvider: React.FC<{ children: React.ReactNode }> = ({ children
     }
   };
 
-  // 게시글 삭제 (실제 SQLite DB 삭제)
-  const deletePost = async (id: number) => {
+  // 게시글 삭제 (작성자 또는 관리자 권한, 실제 Supabase DB 삭제)
+  const deletePost = async (id: number): Promise<{ success: boolean; message?: string }> => {
     try {
-      const token = userToken || adminToken || localStorage.getItem('user_token') || localStorage.getItem('admin_token');
+      const token = adminToken || userToken || localStorage.getItem('admin_token') || localStorage.getItem('user_token');
+      const effectiveUser = adminUser || user;
+      const isAdmin = effectiveUser?.role === 'admin' || !!adminUser;
+      const currentAuthor = effectiveUser?.username || (isAdmin ? 'admin' : '');
+
       const res = await fetch(`${API_BASE}/posts/${id}`, {
         method: 'DELETE',
         headers: {
@@ -350,24 +364,34 @@ export const PostProvider: React.FC<{ children: React.ReactNode }> = ({ children
           ...(token ? { Authorization: `Bearer ${token}` } : {}),
         },
         body: JSON.stringify({
-          author: user?.username,
-          requesterRole: adminUser || user?.role === 'admin' ? 'admin' : 'user',
+          author: currentAuthor,
+          userId: effectiveUser?.id || null,
+          requesterRole: isAdmin ? 'admin' : 'user',
         }),
       });
-      if (res.ok) {
+
+      const data = await res.json().catch(() => ({}));
+      if (res.ok && data.success !== false) {
         setPosts((prev) => prev.filter((p) => p.id !== id));
+        return { success: true, message: data.message || '게시글이 성공적으로 삭제되었습니다.' };
+      } else {
+        return { success: false, message: data.error || '게시글 삭제에 실패했습니다.' };
       }
-    } catch (err) {
+    } catch (err: any) {
       console.error('게시글 삭제 실패:', err);
+      return { success: false, message: '서버 연결 실패로 게시글 삭제에 실패했습니다.' };
     }
   };
 
-  // 게시글 반응(좋아요/싫어요) 토글 (실제 SQLite DB 반영)
+
+  // 게시글 반응(좋아요/싫어요) 토글 (실제 Supabase DB 반영)
   const reactPost = async (
     id: number,
     type: 'like' | 'dislike'
   ): Promise<{ success: boolean; likes: number; dislikes: number; userReaction: 'like' | 'dislike' | null }> => {
     try {
+      const currentUid = user?.id || adminUser?.id;
+      const guestId = getGuestIdentifier();
       const token = userToken || adminToken || localStorage.getItem('user_token') || localStorage.getItem('admin_token');
       const res = await fetch(`${API_BASE}/posts/${id}/react`, {
         method: 'POST',
@@ -377,7 +401,8 @@ export const PostProvider: React.FC<{ children: React.ReactNode }> = ({ children
         },
         body: JSON.stringify({
           type,
-          userId: user?.id || adminUser?.id,
+          userId: currentUid || null,
+          identifier: currentUid ? `user_${currentUid}` : guestId,
         }),
       });
 
@@ -414,7 +439,7 @@ export const PostProvider: React.FC<{ children: React.ReactNode }> = ({ children
     };
   };
 
-  // 게시글 추천/좋아요 (실제 SQLite DB 반영)
+  // 게시글 추천/좋아요 (실제 Supabase DB 반영)
   const likePost = async (id: number): Promise<number> => {
     const result = await reactPost(id, 'like');
     return result.likes;
@@ -424,7 +449,7 @@ export const PostProvider: React.FC<{ children: React.ReactNode }> = ({ children
   // [2. 사용자 인증 API (실제 DB 연동)]
   // ==========================================
 
-  // 로그인 (실제 SQLite 사용자 검증)
+  // 로그인 (실제 Supabase 사용자 검증)
   const login = async (email: string, password: string): Promise<{ success: boolean; message?: string }> => {
     try {
       const res = await fetch(`${API_BASE}/auth/login`, {
@@ -450,7 +475,7 @@ export const PostProvider: React.FC<{ children: React.ReactNode }> = ({ children
     }
   };
 
-  // 회원가입 (실제 SQLite 사용자 등록)
+  // 회원가입 (실제 Supabase 사용자 등록)
   const register = async (
     email: string,
     username: string,
@@ -483,7 +508,7 @@ export const PostProvider: React.FC<{ children: React.ReactNode }> = ({ children
     setAdminToken(null);
   };
 
-  // 프로필 정보 수정 (실제 SQLite DB 반영)
+  // 프로필 정보 수정 (실제 Supabase DB 반영)
   const updateProfile = async (username: string, bio: string): Promise<{ success: boolean; message?: string }> => {
     if (!user || !userToken) {
       return { success: false, message: '로그인이 필요합니다.' };
@@ -623,13 +648,12 @@ export const PostProvider: React.FC<{ children: React.ReactNode }> = ({ children
     }
   };
 
-  // 회원 목록 가져오기 (실제 SQLite DB)
+  // 회원 목록 가져오기 (실제 Supabase DB)
   const fetchUsers = useCallback(async () => {
     const token = adminToken || userToken || localStorage.getItem('admin_token') || localStorage.getItem('user_token');
-    if (!token) return;
     try {
       const res = await fetch(`${API_BASE}/admin/users`, {
-        headers: { Authorization: `Bearer ${token}` },
+        headers: token ? { Authorization: `Bearer ${token}` } : {},
       });
       if (res.ok) {
         const data = await res.json();
@@ -640,7 +664,7 @@ export const PostProvider: React.FC<{ children: React.ReactNode }> = ({ children
     }
   }, [adminToken, userToken]);
 
-  // 관리자 댓글 목록 가져오기 (실제 SQLite DB)
+  // 관리자 댓글 목록 가져오기 (실제 Supabase DB)
   const fetchAdminComments = useCallback(async () => {
     const token = adminToken || userToken || localStorage.getItem('admin_token') || localStorage.getItem('user_token');
     if (!token) return;
@@ -665,7 +689,7 @@ export const PostProvider: React.FC<{ children: React.ReactNode }> = ({ children
     }
   }, [adminToken, userToken, fetchUsers, fetchAdminComments]);
 
-  // 회원 강제 삭제 (실제 SQLite DB)
+  // 회원 강제 삭제 (실제 Supabase DB)
   const deleteUser = async (id: number) => {
     try {
       const res = await fetch(`${API_BASE}/admin/users/${id}`, {
@@ -683,7 +707,7 @@ export const PostProvider: React.FC<{ children: React.ReactNode }> = ({ children
     }
   };
 
-  // 댓글 등록 (실제 SQLite DB 저장 & post.commentCount 동기화)
+  // 댓글 등록 (실제 Supabase DB 저장 & post.commentCount 동기화)
   const addComment = async (
     postId: number,
     content: string,
@@ -729,7 +753,7 @@ export const PostProvider: React.FC<{ children: React.ReactNode }> = ({ children
     }
   };
 
-  // 댓글 수정 (작성한 유저만 수정 가능, 실제 SQLite DB UPDATE)
+  // 댓글 수정 (작성한 유저만 수정 가능, 실제 Supabase DB UPDATE)
   const updateComment = async (
     id: number,
     content: string

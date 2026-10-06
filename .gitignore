@@ -26,3 +26,8 @@ backend/.env
 Thumbs.db
 *.log
 npm-debug.log*
+
+# Vercel & Scratch
+.vercel/
+scratch/
+
