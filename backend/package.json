@@ -7,8 +7,10 @@
   "scripts": {
     "start": "node server.js",
     "dev": "nodemon server.js",
-    "deploy:edge": "npx supabase functions deploy api --no-verify-jwt --use-api --project-ref wfvmnouudayelbbomgzs",
-    "serve:edge": "npx supabase functions serve api --no-verify-jwt"
+    "dev:local": "nodemon server.js",
+    "dev:edge": "npx supabase functions serve api --no-verify-jwt",
+    "serve:edge": "npx supabase functions serve api --no-verify-jwt",
+    "deploy:edge": "npx supabase functions deploy api --no-verify-jwt --use-api --project-ref wfvmnouudayelbbomgzs"
   },
   "keywords": [],
   "author": "",

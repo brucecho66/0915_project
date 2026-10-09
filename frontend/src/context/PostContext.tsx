@@ -51,13 +51,20 @@ interface PostContextType {
 }
 
 const SUPABASE_EDGE_API = 'https://wfvmnouudayelbbomgzs.supabase.co/functions/v1/api';
+const LOCAL_DEV_API = 'http://localhost:5000/api';
 
 const getApiBase = () => {
+  // 1. Vercel 배포 등 실제 도메인 환경에서는 무조건 Supabase Edge Function 사용
+  if (typeof window !== 'undefined' && window.location.hostname !== 'localhost' && window.location.hostname !== '127.0.0.1') {
+    return SUPABASE_EDGE_API;
+  }
+  // 2. 환경 변수가 지정되어 있으면 우선 적용
   const envUrl = ((import.meta as any).env?.VITE_API_URL || '').trim();
   if (envUrl) {
     return envUrl.replace(/\/+$/, '');
   }
-  return SUPABASE_EDGE_API;
+  // 3. 로컬 개발 환경 기본값 (Express + Supabase 로컬 백엔드)
+  return LOCAL_DEV_API;
 };
 
 export const API_BASE = getApiBase();

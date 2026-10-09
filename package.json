@@ -11,6 +11,8 @@
     "supabase:login": "npx supabase login",
     "supabase:link": "npx supabase link",
     "edge:deploy": "npx supabase functions deploy api --project-ref wfvmnouudayelbbomgzs --no-verify-jwt --use-api",
+    "edge:serve": "npx supabase functions serve api --no-verify-jwt",
+    "dev:edge": "npx supabase functions serve api --no-verify-jwt",
     "edge:secrets": "npx supabase secrets set --project-ref wfvmnouudayelbbomgzs",
     "vercel:deploy": "npx vercel"
   }

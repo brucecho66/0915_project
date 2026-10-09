@@ -2199,7 +2199,20 @@ app.use((err, req, res, next) => {
   res.status(500).json({ error: '서버 내부 오류가 발생했습니다.' });
 });
 
-// 서버 실행
-app.listen(PORT, () => {
-  console.log(`Express + Supabase 백엔드 서버가 http://localhost:${PORT} 에서 실행 중입니다.`);
-});
+// 서버 실행 (포트 충돌 시 자동 안전 전환)
+const startServer = (port) => {
+  const server = app.listen(port, () => {
+    console.log(`Express + Supabase 백엔드 개발 서버가 http://localhost:${port} 에서 정상 실행 중입니다.`);
+  });
+
+  server.on('error', (err) => {
+    if (err.code === 'EADDRINUSE') {
+      console.warn(`[포트 충돌 안내] 포트 ${port}가 이미 사용 중입니다. 포트 ${port + 1}로 자동 전환합니다.`);
+      startServer(port + 1);
+    } else {
+      console.error('서버 실행 에러:', err);
+    }
+  });
+};
+
+startServer(Number(PORT) || 5000);
