@@ -1381,13 +1381,15 @@ const adminUsersHandler = async (c: any) => {
       joinedAt: formatDate(u.created_at),
     }));
 
-    return c.json({ users: formatted });
+    return c.json(formatted);
   } catch {
     return c.json({ error: "회원 목록 조회 실패" }, 500);
   }
 };
 app.get("/admin/users", adminUsersHandler);
 app.get("/api/admin/users", adminUsersHandler);
+app.get("/users", adminUsersHandler);
+app.get("/api/users", adminUsersHandler);
 
 // 관리자 회원 삭제
 const adminDeleteUserHandler = async (c: any) => {
@@ -1451,13 +1453,15 @@ const adminCommentsHandler = async (c: any) => {
       postTitle: titleMap[comm.post_id] || "삭제된 게시글",
     }));
 
-    return c.json({ comments: formatted });
+    return c.json(formatted);
   } catch {
     return c.json({ error: "댓글 목록 조회 실패" }, 500);
   }
 };
 app.get("/admin/comments", adminCommentsHandler);
 app.get("/api/admin/comments", adminCommentsHandler);
+app.get("/comments", adminCommentsHandler);
+app.get("/api/comments", adminCommentsHandler);
 
 // 관리자 댓글 삭제
 const adminDeleteCommentHandler = async (c: any) => {

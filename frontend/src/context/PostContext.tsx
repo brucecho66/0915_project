@@ -657,7 +657,7 @@ export const PostProvider: React.FC<{ children: React.ReactNode }> = ({ children
       });
       if (res.ok) {
         const data = await res.json();
-        setUsers(data);
+        setUsers(Array.isArray(data) ? data : (data.users || []));
       }
     } catch (err) {
       console.error('회원 목록 조회 실패:', err);
@@ -674,7 +674,7 @@ export const PostProvider: React.FC<{ children: React.ReactNode }> = ({ children
       });
       if (res.ok) {
         const data = await res.json();
-        setComments(data);
+        setComments(Array.isArray(data) ? data : (data.comments || []));
       }
     } catch (err) {
       console.error('관리자 댓글 목록 조회 실패:', err);
