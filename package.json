@@ -10,7 +10,7 @@
     "build": "npm --prefix frontend install && npm --prefix frontend run build",
     "supabase:login": "npx supabase login",
     "supabase:link": "npx supabase link",
-    "edge:deploy": "npx supabase functions deploy api --project-ref wfvmnouudayelbbomgzs --no-verify-jwt",
+    "edge:deploy": "npx supabase functions deploy api --project-ref wfvmnouudayelbbomgzs --no-verify-jwt --use-api",
     "edge:secrets": "npx supabase secrets set --project-ref wfvmnouudayelbbomgzs",
     "vercel:deploy": "npx vercel"
   }
