@@ -57,6 +57,9 @@ export const Navbar: React.FC = () => {
           <NavLink to="/posts/create" className={({ isActive }) => (isActive ? 'nav-link active' : 'nav-link')}>
             새 글 쓰기
           </NavLink>
+          <NavLink to="/payment" className={({ isActive }) => (isActive ? 'nav-link active' : 'nav-link')} style={{ color: '#2563eb', fontWeight: 600 }}>
+            💳 멤버십/후원
+          </NavLink>
           {user?.role === 'admin' && (
             <NavLink
               to="/admin/posts"

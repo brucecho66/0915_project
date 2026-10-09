@@ -11,7 +11,7 @@ export const RegisterPage: React.FC = () => {
   const [avatarUrl, setAvatarUrl] = useState('');
   const [error, setError] = useState('');
   const [isLoading, setIsLoading] = useState(false);
-  const { register } = usePosts();
+  const { register, loginWithKakao } = usePosts();
   const navigate = useNavigate();
 
   // 기본 아바타 프리셋
@@ -177,6 +177,37 @@ export const RegisterPage: React.FC = () => {
 
           <button type="submit" className="btn btn-primary btn-block" disabled={isLoading} style={{ marginTop: '0.5rem' }}>
             {isLoading ? '가입 처리 중...' : '회원가입 완료'}
+          </button>
+
+          {/* 카카오톡 원클릭 소셜 회원가입 */}
+          <button
+            type="button"
+            onClick={async () => {
+              setIsLoading(true);
+              const res = await loginWithKakao();
+              setIsLoading(false);
+              if (!res.success) {
+                setError(res.message || '카카오 회원가입에 실패했습니다.');
+              }
+            }}
+            className="btn btn-block"
+            style={{
+              marginTop: '0.75rem',
+              backgroundColor: '#FEE500',
+              color: '#191919',
+              fontWeight: 700,
+              display: 'flex',
+              alignItems: 'center',
+              justifyContent: 'center',
+              gap: '0.5rem',
+              border: 'none',
+              borderRadius: '8px',
+              padding: '0.75rem',
+              cursor: 'pointer',
+            }}
+            disabled={isLoading}
+          >
+            <span style={{ fontSize: '1.2rem' }}>💬</span> 카카오톡으로 1초 만에 시작하기
           </button>
         </form>
 

@@ -1552,7 +1552,202 @@ const switchToUserHandler = async (c: any) => {
   }
 };
 app.post("/auth/switch-to-user", switchToUserHandler);
-app.post("/api/auth/switch-to-user", switchToUserHandler);
+// -------------------------------------------------------------
+// [7. 토스페이먼츠 (Toss Payments) 결제 API]
+// -------------------------------------------------------------
+const tossConfirmHandler = async (c: any) => {
+  try {
+    const { paymentKey, orderId, amount } = await c.req.json();
+    if (!paymentKey || !orderId || !amount) {
+      return c.json({ error: "paymentKey, orderId, amount 항목이 필요합니다." }, 400);
+    }
+
+    const user = getUserFromToken(c.req.header("Authorization"));
+    const secretKey = Deno.env.get("TOSS_SECRET_KEY") || "test_sk_zXLkKEParamsJqwjn41rg3950rBa1";
+    const basicAuth = btoa(`${secretKey}:`);
+
+    const tossRes = await fetch("https://api.tosspayments.com/v1/payments/confirm", {
+      method: "POST",
+      headers: {
+        "Authorization": `Basic ${basicAuth}`,
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify({ paymentKey, orderId, amount: Number(amount) }),
+    });
+
+    const tossData = await tossRes.json();
+    if (!tossRes.ok) {
+      return c.json({ error: tossData.message || "토스페이먼츠 승인 실패", details: tossData }, tossRes.status);
+    }
+
+    const supabase = getSupabaseClient();
+    await supabase.from("payments").upsert(
+      {
+        user_id: user?.id || null,
+        order_id: orderId,
+        order_name: tossData.orderName || "커뮤니티 멤버십/후원",
+        amount: Number(amount),
+        status: "DONE",
+        payment_key: paymentKey,
+        method: tossData.method || "간편결제",
+        customer_email: user?.email || tossData.customerEmail || "",
+        customer_name: user?.username || tossData.customerName || "",
+        raw_response: tossData,
+        approved_at: tossData.approvedAt || new Date().toISOString(),
+      },
+      { onConflict: "order_id" }
+    );
+
+    return c.json({ success: true, payment: tossData });
+  } catch (err: any) {
+    return c.json({ error: `결제 승인 처리 오류: ${err.message}` }, 500);
+  }
+};
+app.post("/payments/confirm", tossConfirmHandler);
+app.post("/api/payments/confirm", tossConfirmHandler);
+
+const paymentsListHandler = async (c: any) => {
+  try {
+    const user = getUserFromToken(c.req.header("Authorization"));
+    if (!user) return c.json({ error: "로그인이 필요합니다." }, 401);
+
+    const supabase = getSupabaseClient();
+    let query = supabase.from("payments").select("*").order("id", { ascending: false });
+    if (user.role !== "admin") {
+      query = query.eq("user_id", user.id);
+    }
+    const { data, error } = await query;
+    if (error) return c.json({ error: error.message }, 500);
+
+    return c.json({ success: true, payments: data || [] });
+  } catch {
+    return c.json({ error: "결제 내역 조회 실패" }, 500);
+  }
+};
+app.get("/payments", paymentsListHandler);
+app.get("/api/payments", paymentsListHandler);
+
+// -------------------------------------------------------------
+// [8. OpenAI API 연동 (챗봇, 이미지 생성, TTS)]
+// -------------------------------------------------------------
+const aiChatHandler = async (c: any) => {
+  try {
+    const apiKey = Deno.env.get("OPENAI_API_KEY");
+    if (!apiKey) {
+      return c.json({ error: "OPENAI_API_KEY가 Supabase Secrets에 등록되지 않았습니다." }, 400);
+    }
+
+    const { messages, prompt, action } = await c.req.json();
+    let systemPrompt = "당신은 '온보드' 커뮤니티의 친절하고 지적인 AI 어시스턴트입니다. 한국어로 정중하고 읽기 쉽게 답변하세요.";
+    if (action === "improve") {
+      systemPrompt = "당신은 전문 글쓰기 에디터입니다. 사용자가 작성한 글을 더 매력적이고 자연스럽게 교정 및 개선해 주세요.";
+    } else if (action === "summary") {
+      systemPrompt = "당신은 텍스트 요약 전문가입니다. 사용자의 글을 3줄 핵심 요약으로 명확하게 정리해 주세요.";
+    }
+
+    const finalMessages = messages || [{ role: "user", content: prompt || "안녕하세요!" }];
+    const chatRes = await fetch("https://api.openai.com/v1/chat/completions", {
+      method: "POST",
+      headers: {
+        "Authorization": `Bearer ${apiKey}`,
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify({
+        model: "gpt-4o-mini",
+        messages: [{ role: "system", content: systemPrompt }, ...finalMessages],
+        temperature: 0.7,
+      }),
+    });
+
+    const chatData = await chatRes.json();
+    if (!chatRes.ok) {
+      return c.json({ error: chatData.error?.message || "OpenAI API 호출 실패" }, chatRes.status);
+    }
+
+    const reply = chatData.choices?.[0]?.message?.content || "";
+    return c.json({ success: true, reply, raw: chatData });
+  } catch (err: any) {
+    return c.json({ error: `AI 챗봇 처리 오류: ${err.message}` }, 500);
+  }
+};
+app.post("/ai/chat", aiChatHandler);
+app.post("/api/ai/chat", aiChatHandler);
+
+const aiImageHandler = async (c: any) => {
+  try {
+    const apiKey = Deno.env.get("OPENAI_API_KEY");
+    if (!apiKey) return c.json({ error: "OPENAI_API_KEY가 설정되지 않았습니다." }, 400);
+
+    const { prompt } = await c.req.json();
+    if (!prompt) return c.json({ error: "이미지 생성 프롬프트를 입력하세요." }, 400);
+
+    const imgRes = await fetch("https://api.openai.com/v1/images/generations", {
+      method: "POST",
+      headers: {
+        "Authorization": `Bearer ${apiKey}`,
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify({
+        model: "dall-e-3",
+        prompt: prompt.trim(),
+        n: 1,
+        size: "1024x1024",
+      }),
+    });
+
+    const imgData = await imgRes.json();
+    if (!imgRes.ok) {
+      return c.json({ error: imgData.error?.message || "이미지 생성 실패" }, imgRes.status);
+    }
+
+    const imageUrl = imgData.data?.[0]?.url || "";
+    return c.json({ success: true, imageUrl, revisedPrompt: imgData.data?.[0]?.revised_prompt });
+  } catch (err: any) {
+    return c.json({ error: `이미지 생성 처리 오류: ${err.message}` }, 500);
+  }
+};
+app.post("/ai/image", aiImageHandler);
+app.post("/api/ai/image", aiImageHandler);
+
+const aiTtsHandler = async (c: any) => {
+  try {
+    const apiKey = Deno.env.get("OPENAI_API_KEY");
+    if (!apiKey) return c.json({ error: "OPENAI_API_KEY가 설정되지 않았습니다." }, 400);
+
+    const { text, voice = "alloy" } = await c.req.json();
+    if (!text) return c.json({ error: "변환할 텍스트가 필요합니다." }, 400);
+
+    const ttsRes = await fetch("https://api.openai.com/v1/audio/speech", {
+      method: "POST",
+      headers: {
+        "Authorization": `Bearer ${apiKey}`,
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify({
+        model: "tts-1",
+        input: text.slice(0, 4000),
+        voice,
+      }),
+    });
+
+    if (!ttsRes.ok) {
+      const errJson = await ttsRes.json().catch(() => ({}));
+      return c.json({ error: errJson.error?.message || "TTS 변환 실패" }, ttsRes.status);
+    }
+
+    const audioArrayBuffer = await ttsRes.arrayBuffer();
+    return new Response(audioArrayBuffer, {
+      headers: {
+        "Content-Type": "audio/mpeg",
+        "Cache-Control": "public, max-age=3600",
+      },
+    });
+  } catch (err: any) {
+    return c.json({ error: `TTS 변환 오류: ${err.message}` }, 500);
+  }
+};
+app.post("/ai/tts", aiTtsHandler);
+app.post("/api/ai/tts", aiTtsHandler);
 
 // Deno.serve 엔트리포인트 실행
 Deno.serve(app.fetch);

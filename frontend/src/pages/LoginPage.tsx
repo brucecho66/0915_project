@@ -8,7 +8,7 @@ export const LoginPage: React.FC = () => {
   const [error, setError] = useState('');
   const [isLoading, setIsLoading] = useState(false);
   const [adminInfo, setAdminInfo] = useState<{ email: string; username: string } | null>(null);
-  const { login } = usePosts();
+  const { login, loginWithKakao } = usePosts();
   const navigate = useNavigate();
 
   React.useEffect(() => {
@@ -44,7 +44,7 @@ export const LoginPage: React.FC = () => {
   const handleQuickLogin = async () => {
     setError('');
     setIsLoading(true);
-    const result = await login('user@example.com', '1234');
+    const result = await login('user@example.com', 'user1234!');
     setIsLoading(false);
     if (result.success) {
       navigate('/posts');
@@ -112,6 +112,37 @@ export const LoginPage: React.FC = () => {
             {isLoading ? '로그인 처리 중...' : '로그인'}
           </button>
 
+          {/* 카카오톡 소셜 로그인 버튼 */}
+          <button
+            type="button"
+            onClick={async () => {
+              setIsLoading(true);
+              const res = await loginWithKakao();
+              setIsLoading(false);
+              if (!res.success) {
+                setError(res.message || '카카오 로그인에 실패했습니다. Supabase 카카오 Provider 설정을 확인하세요.');
+              }
+            }}
+            className="btn btn-block"
+            style={{
+              marginTop: '0.75rem',
+              backgroundColor: '#FEE500',
+              color: '#191919',
+              fontWeight: 700,
+              display: 'flex',
+              alignItems: 'center',
+              justifyContent: 'center',
+              gap: '0.5rem',
+              border: 'none',
+              borderRadius: '8px',
+              padding: '0.75rem',
+              cursor: 'pointer',
+            }}
+            disabled={isLoading}
+          >
+            <span style={{ fontSize: '1.2rem' }}>💬</span> 카카오톡으로 1초 만에 시작하기
+          </button>
+
           <button
             type="button"
             onClick={handleQuickLogin}
@@ -119,7 +150,7 @@ export const LoginPage: React.FC = () => {
             style={{ marginTop: '0.5rem' }}
             disabled={isLoading}
           >
-            ⚡ 테스트 계정(user@example.com)으로 바로 로그인
+            ⚡ 테스트 계정(user@example.com / user1234!) 바로 로그인
           </button>
 
           <button
@@ -129,7 +160,7 @@ export const LoginPage: React.FC = () => {
             style={{ marginTop: '0.5rem', borderColor: '#4f46e5', color: '#4f46e5' }}
             disabled={isLoading}
           >
-            🛡️ .env 관리자 이메일({adminInfo?.email || 'iicbruce@naver.com'}) 자동 입력
+            🛡️ 관리자 이메일({adminInfo?.email || 'iicbruce@naver.com'}) 자동 입력
           </button>
         </form>
 

@@ -1,5 +1,6 @@
 import React, { createContext, useContext, useState, useEffect, useCallback } from 'react';
 import type { Post, User, Comment } from '../types';
+import { supabase } from '../lib/supabase';
 
 export interface AdminComment extends Comment {
   postTitle?: string;
@@ -48,6 +49,9 @@ interface PostContextType {
   updateAdminAccount: (params: UpdateAdminParams) => Promise<{ success: boolean; message?: string }>;
   switchToAdmin: () => Promise<{ success: boolean; message?: string }>;
   switchToUser: () => Promise<{ success: boolean; message?: string }>;
+  loginWithKakao: () => Promise<{ success: boolean; message?: string }>;
+  setUser: React.Dispatch<React.SetStateAction<User | null>>;
+  setUserToken: React.Dispatch<React.SetStateAction<string | null>>;
 }
 
 const SUPABASE_EDGE_API = 'https://wfvmnouudayelbbomgzs.supabase.co/functions/v1/api';
@@ -508,6 +512,24 @@ export const PostProvider: React.FC<{ children: React.ReactNode }> = ({ children
     setAdminToken(null);
   };
 
+  // 카카오톡 소셜 로그인 연동
+  const loginWithKakao = async (): Promise<{ success: boolean; message?: string }> => {
+    try {
+      const { error } = await supabase.auth.signInWithOAuth({
+        provider: 'kakao',
+        options: {
+          redirectTo: `${window.location.origin}/auth/callback`,
+        },
+      });
+      if (error) {
+        return { success: false, message: error.message };
+      }
+      return { success: true };
+    } catch (err: any) {
+      return { success: false, message: err.message || '카카오 로그인 처리 실패' };
+    }
+  };
+
   // 프로필 정보 수정 (실제 Supabase DB 반영)
   const updateProfile = async (username: string, bio: string): Promise<{ success: boolean; message?: string }> => {
     if (!user || !userToken) {
@@ -910,6 +932,9 @@ export const PostProvider: React.FC<{ children: React.ReactNode }> = ({ children
         updateAdminAccount,
         switchToAdmin,
         switchToUser,
+        loginWithKakao,
+        setUser,
+        setUserToken,
       }}
     >
       {children}

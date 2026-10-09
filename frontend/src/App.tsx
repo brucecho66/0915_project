@@ -11,6 +11,10 @@ import { PostDetailPage } from './pages/PostDetailPage';
 import { PostEditPage } from './pages/PostEditPage';
 import { AdminLoginPage } from './pages/admin/AdminLoginPage';
 import { AdminDashboardPage } from './pages/admin/AdminDashboardPage';
+import { AuthCallbackPage } from './pages/AuthCallbackPage';
+import { PaymentPage } from './pages/PaymentPage';
+import { PaymentSuccessPage } from './pages/PaymentSuccessPage';
+import { PaymentFailPage } from './pages/PaymentFailPage';
 import './App.css';
 
 function App() {
@@ -28,6 +32,10 @@ function App() {
             <Route path="posts/create" element={<PostCreatePage />} />
             <Route path="posts/:id" element={<PostDetailPage />} />
             <Route path="posts/:id/edit" element={<PostEditPage />} />
+            <Route path="auth/callback" element={<AuthCallbackPage />} />
+            <Route path="payment" element={<PaymentPage />} />
+            <Route path="payment/success" element={<PaymentSuccessPage />} />
+            <Route path="payment/fail" element={<PaymentFailPage />} />
           </Route>
 
           {/* 2. 관리자 전용 독립 페이지 */}
