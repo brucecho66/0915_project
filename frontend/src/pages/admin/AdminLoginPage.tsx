@@ -53,26 +53,28 @@ export const AdminLoginPage: React.FC = () => {
 
         {error && <div className="admin-alert-error">{error}</div>}
 
-        {user && user.role !== 'admin' && (
-          <div style={{ background: '#eff6ff', border: '1px solid #bfdbfe', borderRadius: '8px', padding: '1rem', marginBottom: '1.25rem', textAlign: 'center' }}>
-            <p style={{ margin: '0 0 0.6rem 0', fontSize: '0.9rem', color: '#1e40af' }}>
-              현재 일반 회원 <strong>'{user.username}'</strong> ({user.email}) 계정으로 접속 중입니다.
-            </p>
-            <button
-              type="button"
-              onClick={async () => {
-                const res = await switchToAdmin();
-                if (res.success) {
-                  navigate('/admin');
-                }
-              }}
-              className="btn btn-primary btn-block"
-              style={{ padding: '0.65rem 1rem', fontSize: '0.95rem', fontWeight: 700 }}
-            >
-              ⚡ .env 관리자 계정으로 즉시 전환하여 접속
-            </button>
-          </div>
-        )}
+        <div style={{ background: '#eff6ff', border: '1px solid #bfdbfe', borderRadius: '8px', padding: '1rem', marginBottom: '1.25rem', textAlign: 'center' }}>
+          <p style={{ margin: '0 0 0.6rem 0', fontSize: '0.9rem', color: '#1e40af' }}>
+            {user && user.role !== 'admin' ? (
+              <>현재 일반 회원 <strong>'{user.username}'</strong> ({user.email}) 계정으로 접속 중입니다.</>
+            ) : (
+              <>원클릭 최고관리자(bodyguard) 인증으로 즉시 콘솔에 입장할 수 있습니다.</>
+            )}
+          </p>
+          <button
+            type="button"
+            onClick={async () => {
+              const res = await switchToAdmin();
+              if (res.success) {
+                navigate('/admin');
+              }
+            }}
+            className="btn btn-primary btn-block"
+            style={{ padding: '0.75rem 1rem', fontSize: '1rem', fontWeight: 700, backgroundColor: '#2563eb' }}
+          >
+            ⚡ 최고관리자(bodyguard)로 1초 만에 원클릭 접속
+          </button>
+        </div>
 
         <div className="admin-env-notice">
           <strong>💡 .env 설정 관리자 계정 정보 (SQLite DB 자동 동기화)</strong>

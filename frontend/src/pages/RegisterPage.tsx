@@ -3,7 +3,9 @@ import { Link, useNavigate } from 'react-router-dom';
 import { usePosts } from '../context/PostContext';
 
 export const RegisterPage: React.FC = () => {
+  const [name, setName] = useState('');
   const [username, setUsername] = useState('');
+  const [phone, setPhone] = useState('');
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
   const [confirmPassword, setConfirmPassword] = useState('');
@@ -37,7 +39,15 @@ export const RegisterPage: React.FC = () => {
     }
 
     setIsLoading(true);
-    const result = await register(email, username, password, bio.trim(), avatarUrl.trim());
+    const result = await register(
+      email,
+      username.trim(),
+      password,
+      bio.trim(),
+      avatarUrl.trim(),
+      name.trim() || username.trim(),
+      phone.trim()
+    );
     setIsLoading(false);
 
     if (result.success) {
@@ -74,14 +84,37 @@ export const RegisterPage: React.FC = () => {
 
         <form onSubmit={handleSubmit} className="auth-form">
           <div className="form-group">
-            <label htmlFor="reg-username">사용자 닉네임 *</label>
+            <label htmlFor="reg-name">이름 (성명 / 실명) *</label>
+            <input
+              id="reg-name"
+              type="text"
+              placeholder="예: 홍길동"
+              value={name}
+              onChange={(e) => setName(e.target.value)}
+              required
+            />
+          </div>
+
+          <div className="form-group">
+            <label htmlFor="reg-username">사용자 닉네임 (활동명) *</label>
             <input
               id="reg-username"
               type="text"
-              placeholder="예: 홍길동"
+              placeholder="예: 쾌걸홍길동"
               value={username}
               onChange={(e) => setUsername(e.target.value)}
               required
+            />
+          </div>
+
+          <div className="form-group">
+            <label htmlFor="reg-phone">연락처 / 휴대폰 번호 (선택)</label>
+            <input
+              id="reg-phone"
+              type="tel"
+              placeholder="예: 010-1234-5678"
+              value={phone}
+              onChange={(e) => setPhone(e.target.value)}
             />
           </div>
 

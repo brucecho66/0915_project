@@ -18,6 +18,9 @@ export interface User {
   id: number;
   email: string;
   username: string;
+  name?: string;
+  nickname?: string;
+  phone?: string;
   role?: 'admin' | 'user';
   bio?: string;
   avatarUrl?: string;

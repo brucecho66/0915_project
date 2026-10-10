@@ -80,28 +80,29 @@ export const AdminDashboardPage: React.FC<{ defaultCategory?: AdminCategory }> =
         <div className="guard-card">
           <div className="guard-icon">🔒</div>
           <h2>관리자 인증이 필요합니다</h2>
-          {user ? (
-            <div style={{ marginBottom: '1.25rem' }}>
-              <p style={{ color: '#475569', fontSize: '0.95rem', marginBottom: '1rem' }}>
-                현재 일반 회원 <strong>'{user.username}' ({user.email})</strong> 계정으로 접속되어 있습니다.<br />
-                관리자 대시보드에 접근하려면 관리자 권한이 필요합니다.
-              </p>
-              <button
-                onClick={async () => {
-                  const res = await switchToAdmin();
-                  if (!res.success) {
-                    navigate('/admin/login');
-                  }
-                }}
-                className="btn btn-primary btn-block"
-                style={{ padding: '0.8rem 1.5rem', fontSize: '1rem', fontWeight: 700 }}
-              >
-                🛡️ .env 관리자 계정으로 즉시 전환하여 입장
-              </button>
-            </div>
-          ) : (
-            <p>관리자 페이지에 접근하려면 먼저 관리자 계정으로 로그인해 주세요.</p>
-          )}
+          <div style={{ marginBottom: '1.25rem' }}>
+            <p style={{ color: '#475569', fontSize: '0.95rem', marginBottom: '1rem' }}>
+              {user ? (
+                <>현재 일반 회원 <strong>'{user.username}' ({user.email})</strong> 계정으로 접속되어 있습니다.<br />관리자 대시보드에 접근하려면 관리자 권한이 필요합니다.</>
+              ) : (
+                <>관리자 대시보드에 접근하려면 관리자 권한이 필요합니다.<br />원클릭 최고관리자 접속 또는 직접 비밀번호로 입장하세요.</>
+              )}
+            </p>
+            <button
+              onClick={async () => {
+                const res = await switchToAdmin();
+                if (res.success) {
+                  navigate('/admin');
+                } else {
+                  navigate('/admin/login');
+                }
+              }}
+              className="btn btn-primary btn-block"
+              style={{ padding: '0.8rem 1.5rem', fontSize: '1rem', fontWeight: 700, backgroundColor: '#2563eb' }}
+            >
+              🛡️ 최고관리자(bodyguard)로 즉시 접속하여 입장
+            </button>
+          </div>
           <div style={{ marginTop: '1rem', display: 'flex', gap: '0.75rem', justifyContent: 'center' }}>
             <Link to="/admin/login" className="btn btn-outline">
               직접 비밀번호 입력
@@ -156,6 +157,9 @@ export const AdminDashboardPage: React.FC<{ defaultCategory?: AdminCategory }> =
         id: effectiveAdmin.id || 8,
         email: effectiveAdmin.email,
         username: effectiveAdmin.username,
+        name: effectiveAdmin.name || effectiveAdmin.username,
+        nickname: effectiveAdmin.nickname || effectiveAdmin.username,
+        phone: effectiveAdmin.phone || '',
         role: 'admin',
         bio: effectiveAdmin.bio || '시스템 총괄 최고관리자 계정입니다.',
         joinedAt: effectiveAdmin.joinedAt || '2026-09-28',
@@ -173,6 +177,9 @@ export const AdminDashboardPage: React.FC<{ defaultCategory?: AdminCategory }> =
     .filter((u) => {
       const matchesSearch =
         u.username.toLowerCase().includes(userSearch.toLowerCase()) ||
+        (u.name && u.name.toLowerCase().includes(userSearch.toLowerCase())) ||
+        (u.nickname && u.nickname.toLowerCase().includes(userSearch.toLowerCase())) ||
+        (u.phone && u.phone.includes(userSearch)) ||
         u.email.toLowerCase().includes(userSearch.toLowerCase());
       if (!matchesSearch) return false;
       if (userRoleFilter === 'admin') return u.role === 'admin';
@@ -718,20 +725,21 @@ export const AdminDashboardPage: React.FC<{ defaultCategory?: AdminCategory }> =
                 <table className="admin-table">
                   <thead>
                     <tr>
-                      <th style={{ width: '55px' }}>ID</th>
-                      <th style={{ width: '140px' }}>닉네임</th>
+                      <th style={{ width: '50px' }}>ID</th>
+                      <th style={{ width: '150px' }}>이름 / 닉네임</th>
                       <th>이메일</th>
-                      <th style={{ width: '120px' }}>권한</th>
-                      <th style={{ width: '150px' }}>분리 DB 테이블</th>
+                      <th style={{ width: '120px' }}>연락처</th>
+                      <th style={{ width: '110px' }}>권한</th>
+                      <th style={{ width: '140px' }}>분리 DB 테이블</th>
                       <th>자기소개</th>
-                      <th style={{ width: '105px' }}>가입일</th>
-                      <th style={{ width: '130px' }}>관리 작업</th>
+                      <th style={{ width: '100px' }}>가입일</th>
+                      <th style={{ width: '110px' }}>관리 작업</th>
                     </tr>
                   </thead>
                   <tbody>
                     {filteredUsers.length === 0 ? (
                       <tr>
-                        <td colSpan={8} style={{ textAlign: 'center', padding: '2.5rem 1rem', color: '#64748b' }}>
+                        <td colSpan={9} style={{ textAlign: 'center', padding: '2.5rem 1rem', color: '#64748b' }}>
                           검색 조건과 일치하는 회원이 없습니다.
                         </td>
                       </tr>
@@ -750,28 +758,40 @@ export const AdminDashboardPage: React.FC<{ defaultCategory?: AdminCategory }> =
                         >
                           <td className="center">{u.id}</td>
                           <td>
-                            <div style={{ display: 'flex', alignItems: 'center', gap: '0.4rem', flexWrap: 'wrap' }}>
-                              <strong style={u.role === 'admin' ? { color: '#92400e' } : {}}>{u.username}</strong>
-                              {u.role === 'admin' && (
-                                <span
-                                  style={{
-                                    fontSize: '0.7rem',
-                                    padding: '0.15rem 0.4rem',
-                                    backgroundColor: '#fef3c7',
-                                    color: '#b45309',
-                                    borderRadius: '4px',
-                                    fontWeight: 700,
-                                    border: '1px solid #fde68a',
-                                  }}
-                                >
-                                  👑 관리자
-                                </span>
+                            <div style={{ display: 'flex', flexDirection: 'column', gap: '0.2rem' }}>
+                              <div style={{ display: 'flex', alignItems: 'center', gap: '0.4rem', flexWrap: 'wrap' }}>
+                                <strong style={u.role === 'admin' ? { color: '#92400e' } : {}}>
+                                  {u.nickname || u.username}
+                                </strong>
+                                {u.role === 'admin' && (
+                                  <span
+                                    style={{
+                                      fontSize: '0.7rem',
+                                      padding: '0.15rem 0.4rem',
+                                      backgroundColor: '#fef3c7',
+                                      color: '#b45309',
+                                      borderRadius: '4px',
+                                      fontWeight: 700,
+                                      border: '1px solid #fde68a',
+                                    }}
+                                  >
+                                    👑 관리자
+                                  </span>
+                                )}
+                              </div>
+                              {u.name && u.name !== (u.nickname || u.username) && (
+                                <span style={{ fontSize: '0.75rem', color: '#64748b' }}>실명: {u.name}</span>
                               )}
                             </div>
                           </td>
                           <td>
                             <span style={u.role === 'admin' ? { fontWeight: 600, color: '#1e293b' } : {}}>
                               {u.email}
+                            </span>
+                          </td>
+                          <td>
+                            <span style={{ fontSize: '0.85rem', color: u.phone ? '#1e293b' : '#94a3b8' }}>
+                              {u.phone || '-'}
                             </span>
                           </td>
                           <td>

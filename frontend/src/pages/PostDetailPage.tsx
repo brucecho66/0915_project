@@ -66,7 +66,7 @@ export const PostDetailPage: React.FC = () => {
 
     let isCurrent = true;
 
-    // 백엔드 API에서 최신 상세 정보, 댓글 목록, 조회수 갱신 병렬 실행
+    // 백엔드 API에서 최신 상세 정보, 댓글 목록, 조회수 갱신 실행
     const token = localStorage.getItem('user_token') || localStorage.getItem('admin_token');
     const authHeaders: Record<string, string> = token ? { Authorization: `Bearer ${token}` } : {};
 
@@ -77,8 +77,11 @@ export const PostDetailPage: React.FC = () => {
 
     const loadDetail = async () => {
       try {
-        const [viewCount, postData, commentsData] = await Promise.all([
-          incrementPostView(postId),
+        // 1. 조회수 증가 API 우선 실행 (DB views 증가 및 Context posts 상태 동기화)
+        const viewCount = await incrementPostView(postId);
+
+        // 2. 게시글 상세 정보 및 댓글 목록 조회
+        const [postData, commentsData] = await Promise.all([
           fetch(postUrl, { headers: authHeaders }).then(async (res) => (res.ok ? await res.json() : null)),
           fetch(`${API_BASE}/posts/${postId}/comments`, { headers: authHeaders }).then(async (res) => (res.ok ? await res.json() : [])),
         ]);
@@ -87,7 +90,7 @@ export const PostDetailPage: React.FC = () => {
           if (postData) {
             const finalViews = typeof viewCount === 'number' && viewCount > 0
               ? Math.max(postData.views || 0, viewCount)
-              : ((postData.views || 0) + 1);
+              : Math.max((postData.views || 0) + 1, 1);
             setPost({ ...postData, views: finalViews });
             setLikes(postData.likes || 0);
             setDislikes(postData.dislikes || 0);
@@ -113,7 +116,7 @@ export const PostDetailPage: React.FC = () => {
     return () => {
       isCurrent = false;
     };
-  }, [id, getPost, incrementPostView, user, adminUser]);
+  }, [id, user?.id, adminUser?.id]);
 
   const isAuthor = Boolean(
     post &&
@@ -635,11 +638,11 @@ export const PostDetailPage: React.FC = () => {
               </div>
             ) : (
               comments.map((c) => {
-                // 댓글 작성자 본인 확인: 작성 유저의 고유 ID와 현재 로그인한 유저의 ID가 일치할 때만 본인으로 인정
+                // 댓글 작성자 본인 확인: 작성 유저의 고유 ID 또는 닉네임이 일치할 때만 본인으로 인정
                 // 새로운 유저가 접근 시 타인의 댓글에는 수정/삭제 버튼이 일체 노출되지 않습니다.
                 const isCommentOwner = Boolean(
-                  (user && c.userId && Number(user.id) === Number(c.userId)) ||
-                  (adminUser && c.userId && Number(adminUser.id) === Number(c.userId))
+                  (user && ((c.userId && Number(user.id) === Number(c.userId)) || user.username === c.author)) ||
+                  (adminUser && ((c.userId && Number(adminUser.id) === Number(c.userId)) || adminUser.username === c.author))
                 );
 
                 const isEditingThis = editingCommentId === c.id;

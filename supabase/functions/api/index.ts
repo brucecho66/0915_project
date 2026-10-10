@@ -115,7 +115,7 @@ const registerHandler = async (c: any) => {
   try {
     const supabase = getSupabaseClient();
     const body = await c.req.json();
-    const { email, username, password, bio, avatarUrl, avatar_url } = body;
+    const { email, username, password, bio, avatarUrl, avatar_url, name, nickname, phone } = body;
 
     if (!email || !username || !password) {
       return c.json({ error: "이메일, 닉네임, 비밀번호를 모두 입력해주세요." }, 400);
@@ -127,19 +127,28 @@ const registerHandler = async (c: any) => {
 
     const trimmedEmail = email.trim().toLowerCase();
     const trimmedUsername = username.trim();
+    const trimmedName = (name || username || "").trim();
+    const trimmedNickname = (nickname || username || "").trim();
+    const trimmedPhone = (phone || "").trim();
     const trimmedBio = (bio || "").trim() || "새로 가입한 회원입니다.";
     const finalAvatar = (avatarUrl || avatar_url || "").trim();
+
+    // E.164 유효성 검사 (예: +821012345678)
+    const isE164 = /^\+[1-9]\d{1,14}$/.test(trimmedPhone);
 
     // [1단계: Supabase Auth 유저 생성]
     const { data: authUser, error: authError } = await supabase.auth.admin.createUser({
       email: trimmedEmail,
       password: password,
       email_confirm: true,
+      ...(isE164 ? { phone: trimmedPhone } : {}),
       user_metadata: {
         username: trimmedUsername,
-        name: trimmedUsername,
-        full_name: trimmedUsername,
-        display_name: trimmedUsername,
+        name: trimmedName,
+        nickname: trimmedNickname,
+        phone: trimmedPhone,
+        full_name: trimmedName,
+        display_name: trimmedNickname,
         role: "user",
         bio: trimmedBio,
         avatar_url: finalAvatar,
@@ -167,6 +176,9 @@ const registerHandler = async (c: any) => {
             {
               email: trimmedEmail,
               username: trimmedUsername,
+              name: trimmedName,
+              nickname: trimmedNickname,
+              phone: trimmedPhone,
               password: hashedPassword,
               role: "user",
               bio: trimmedBio,
@@ -184,6 +196,9 @@ const registerHandler = async (c: any) => {
               {
                 email: trimmedEmail,
                 username: trimmedUsername,
+                name: trimmedName,
+                nickname: trimmedNickname,
+                phone: trimmedPhone,
                 password: hashedPassword,
                 role: "user",
                 bio: trimmedBio,
@@ -198,9 +213,10 @@ const registerHandler = async (c: any) => {
           const rec = recoverRes.data;
           const formatted = {
             id: rec.id,
-            name: rec.username,
-            nickname: rec.username,
+            name: rec.name || trimmedName,
+            nickname: rec.nickname || trimmedNickname,
             username: rec.username,
+            phone: rec.phone || trimmedPhone,
             email: rec.email,
             role: rec.role,
             bio: rec.bio,
@@ -225,6 +241,9 @@ const registerHandler = async (c: any) => {
     const userPayload: any = {
       email: trimmedEmail,
       username: trimmedUsername,
+      name: trimmedName,
+      nickname: trimmedNickname,
+      phone: trimmedPhone,
       password: hashedPassword,
       role: "user",
       bio: trimmedBio,
@@ -264,6 +283,9 @@ const registerHandler = async (c: any) => {
           user_id: newUser.id,
           email: trimmedEmail,
           username: trimmedUsername,
+          name: trimmedName,
+          nickname: trimmedNickname,
+          phone: trimmedPhone,
           bio: trimmedBio,
           avatar_url: finalAvatar,
           role: "user",
@@ -276,9 +298,10 @@ const registerHandler = async (c: any) => {
 
     const formattedUser = {
       id: newUser.id,
-      name: newUser.username,
-      nickname: newUser.username,
+      name: newUser.name || trimmedName,
+      nickname: newUser.nickname || trimmedNickname,
       username: newUser.username,
+      phone: newUser.phone || trimmedPhone,
       email: newUser.email,
       role: newUser.role,
       bio: newUser.bio,
@@ -444,10 +467,11 @@ const loginHandler = async (c: any) => {
 
     const userData = {
       id: user.id,
-      name: user.username,
-      nickname: user.username,
-      email: user.email,
+      name: user.name || profile?.name || user.username,
+      nickname: user.nickname || profile?.nickname || user.username,
       username: user.username,
+      phone: user.phone || profile?.phone || "",
+      email: user.email,
       role: user.role,
       bio: profile?.bio || user.bio || "",
       avatarUrl: profile?.avatar_url || user.avatar_url || "",
@@ -494,7 +518,7 @@ const meHandler = async (c: any) => {
 
     const { data: profile } = await supabase
       .from("profiles")
-      .select("bio, avatar_url")
+      .select("name, nickname, phone, bio, avatar_url")
       .eq("email", user.email)
       .maybeSingle();
 
@@ -502,10 +526,11 @@ const meHandler = async (c: any) => {
       success: true,
       user: {
         id: user.id,
-        name: user.username,
-        nickname: user.username,
-        email: user.email,
+        name: user.name || profile?.name || user.username,
+        nickname: user.nickname || profile?.nickname || user.username,
         username: user.username,
+        phone: user.phone || profile?.phone || "",
+        email: user.email,
         role: user.role,
         bio: profile?.bio || user.bio || "",
         avatarUrl: profile?.avatar_url || user.avatar_url || "",
@@ -1275,16 +1300,17 @@ const adminLoginHandler = async (c: any) => {
     // profiles 테이블에서 프로필 상세 조회
     const { data: profile } = await supabase
       .from("profiles")
-      .select("bio, avatar_url")
+      .select("name, nickname, phone, bio, avatar_url")
       .eq("email", user.email)
       .maybeSingle();
 
     const formattedAdmin = {
       id: user.id,
-      name: user.username,
-      nickname: user.username,
-      email: user.email,
+      name: user.name || profile?.name || user.username,
+      nickname: user.nickname || profile?.nickname || user.username,
       username: user.username,
+      phone: user.phone || profile?.phone || "",
+      email: user.email,
       role: "admin",
       bio: profile?.bio || user.bio || "",
       avatarUrl: profile?.avatar_url || user.avatar_url || "",
@@ -1513,9 +1539,10 @@ const adminUsersHandler = async (c: any) => {
       const prof = profileMap[u.email?.toLowerCase()] || {};
       return {
         id: u.id,
-        name: u.username,
-        nickname: u.username,
+        name: u.name || prof.name || u.username,
+        nickname: u.nickname || prof.nickname || u.username,
         username: u.username,
+        phone: u.phone || prof.phone || "",
         email: u.email,
         role: u.role,
         bio: prof.bio || u.bio || "",
@@ -1662,8 +1689,9 @@ const switchToAdminHandler = async (c: any) => {
     const { password: _, ...adminData } = admin;
     const formatted = {
       ...adminData,
-      name: admin.username,
-      nickname: admin.username,
+      name: admin.name || admin.username,
+      nickname: admin.nickname || admin.username,
+      phone: admin.phone || "",
       joinedAt: formatDate(admin.created_at),
     };
     return c.json({

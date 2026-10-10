@@ -41,7 +41,15 @@ interface PostContextType {
   likePost: (id: number) => Promise<number>;
   reactPost: (id: number, type: 'like' | 'dislike') => Promise<{ success: boolean; likes: number; dislikes: number; userReaction: 'like' | 'dislike' | null }>;
   login: (email: string, password: string) => Promise<{ success: boolean; message?: string }>;
-  register: (email: string, username: string, password: string, bio?: string, avatarUrl?: string) => Promise<{ success: boolean; message?: string }>;
+  register: (
+    email: string,
+    username: string,
+    password: string,
+    bio?: string,
+    avatarUrl?: string,
+    name?: string,
+    phone?: string
+  ) => Promise<{ success: boolean; message?: string }>;
   logout: () => void;
   updateProfile: (username: string, bio: string) => Promise<{ success: boolean; message?: string }>;
   adminLogin: (email: string, password: string) => Promise<{ success: boolean; message?: string }>;
@@ -210,9 +218,9 @@ export const PostProvider: React.FC<{ children: React.ReactNode }> = ({ children
     return 0;
   };
 
-  const getPost = (id: number) => {
+  const getPost = useCallback((id: number) => {
     return posts.find((p) => p.id === id);
-  };
+  }, [posts]);
 
   // 클라이언트 게스트 고유 식별자 헬퍼 (비회원 추천 및 조회 상태 추적용)
   const getGuestIdentifier = () => {
@@ -225,7 +233,7 @@ export const PostProvider: React.FC<{ children: React.ReactNode }> = ({ children
   };
 
   // 게시글 조회수 1회 증가 (회원, 신규 유저 및 비회원 방문자 모두 카운트, 로컬스토리지 및 IP 기반)
-  const incrementPostView = async (id: number): Promise<number> => {
+  const incrementPostView = useCallback(async (id: number): Promise<number> => {
     const currentUid = user?.id || adminUser?.id;
     const guestId = getGuestIdentifier();
     const viewerKey = currentUid ? `user_${currentUid}` : guestId;
@@ -240,6 +248,7 @@ export const PostProvider: React.FC<{ children: React.ReactNode }> = ({ children
         },
         body: JSON.stringify({
           userId: currentUid || null,
+          viewerId: currentUid || null,
           identifier: viewerKey,
         }),
       });
@@ -258,9 +267,8 @@ export const PostProvider: React.FC<{ children: React.ReactNode }> = ({ children
       console.error('조회수 반영 실패:', err);
     }
 
-    const current = posts.find((p) => p.id === id);
-    return (current?.views || 0) + 1;
-  };
+    return 0;
+  }, [user?.id, adminUser?.id, userToken, adminToken]);
 
   // 게시글 상세 조회 및 조회수/댓글수 동기화 (실제 DB 실시간 반영)
   const fetchPostDetail = useCallback(async (id: number): Promise<Post | undefined> => {
@@ -477,19 +485,30 @@ export const PostProvider: React.FC<{ children: React.ReactNode }> = ({ children
     }
   };
 
-  // 회원가입 (실제 Supabase 사용자 등록 및 bio, avatarUrl 동기화)
+  // 회원가입 (실제 Supabase 사용자 등록 및 name, phone, bio, avatarUrl 동기화)
   const register = async (
     email: string,
     username: string,
     password: string,
     bio?: string,
-    avatarUrl?: string
+    avatarUrl?: string,
+    name?: string,
+    phone?: string
   ): Promise<{ success: boolean; message?: string }> => {
     try {
       const res = await fetch(`${API_BASE}/auth/register`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ email, username, password, bio, avatarUrl }),
+        body: JSON.stringify({
+          email,
+          username,
+          password,
+          bio,
+          avatarUrl,
+          name: name || username,
+          phone: phone || '',
+          nickname: username,
+        }),
       });
 
       const data = await res.json();
