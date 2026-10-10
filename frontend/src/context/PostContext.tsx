@@ -82,32 +82,41 @@ export const PostProvider: React.FC<{ children: React.ReactNode }> = ({ children
 
   // 일반 사용자 세션 및 JWT 토큰
   const [user, setUser] = useState<User | null>(() => {
-    const saved = localStorage.getItem('user_data');
-    return saved ? JSON.parse(saved) : null;
+    try {
+      const saved = localStorage.getItem('user_data');
+      if (saved && saved !== 'undefined') return JSON.parse(saved);
+    } catch (e) {
+      console.warn('Failed to parse user_data from localStorage:', e);
+    }
+    return null;
   });
 
   const [userToken, setUserToken] = useState<string | null>(() => {
-    return localStorage.getItem('user_token') || null;
+    const saved = localStorage.getItem('user_token');
+    return saved && saved !== 'undefined' ? saved : null;
   });
 
   // 관리자 세션 및 JWT 토큰
   const [adminUser, setAdminUser] = useState<User | null>(() => {
-    const saved = localStorage.getItem('admin_user');
-    if (saved) return JSON.parse(saved);
-    const userSaved = localStorage.getItem('user_data');
-    if (userSaved) {
-      try {
+    try {
+      const saved = localStorage.getItem('admin_user');
+      if (saved && saved !== 'undefined') return JSON.parse(saved);
+      const userSaved = localStorage.getItem('user_data');
+      if (userSaved && userSaved !== 'undefined') {
         const u = JSON.parse(userSaved);
-        if (u.role === 'admin') return u;
-      } catch (e) {}
+        if (u && u.role === 'admin') return u;
+      }
+    } catch (e) {
+      console.warn('Failed to parse admin_user from localStorage:', e);
     }
     return null;
   });
 
   const [adminToken, setAdminToken] = useState<string | null>(() => {
     const saved = localStorage.getItem('admin_token');
-    if (saved) return saved;
-    return localStorage.getItem('user_token') || null;
+    if (saved && saved !== 'undefined') return saved;
+    const userTok = localStorage.getItem('user_token');
+    return userTok && userTok !== 'undefined' ? userTok : null;
   });
 
   // 관리자 회원 및 댓글 관리 상태

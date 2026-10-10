@@ -404,7 +404,7 @@ export const AdminDashboardPage: React.FC<{ defaultCategory?: AdminCategory }> =
                   <div className="stat-icon-wrapper blue">📊</div>
                   <div className="stat-info">
                     <span className="stat-title">총 조회수</span>
-                    <span className="stat-value">{totalViews.toLocaleString()}회</span>
+                    <span className="stat-value">{(totalViews ?? 0).toLocaleString()}회</span>
                   </div>
                 </div>
                 <div
@@ -416,7 +416,7 @@ export const AdminDashboardPage: React.FC<{ defaultCategory?: AdminCategory }> =
                   <div className="stat-icon-wrapper green">📝</div>
                   <div className="stat-info">
                     <span className="stat-title">총 게시글</span>
-                    <span className="stat-value">{posts.length}개</span>
+                    <span className="stat-value">{Array.isArray(posts) ? posts.length : 0}개</span>
                   </div>
                 </div>
                 <div
@@ -428,7 +428,7 @@ export const AdminDashboardPage: React.FC<{ defaultCategory?: AdminCategory }> =
                   <div className="stat-icon-wrapper purple">👥</div>
                   <div className="stat-info">
                     <span className="stat-title">등록 회원</span>
-                    <span className="stat-value">{users.length}명</span>
+                    <span className="stat-value">{Array.isArray(displayUsers) ? displayUsers.length : 0}명</span>
                   </div>
                 </div>
                 <div
@@ -440,7 +440,7 @@ export const AdminDashboardPage: React.FC<{ defaultCategory?: AdminCategory }> =
                   <div className="stat-icon-wrapper orange">💬</div>
                   <div className="stat-info">
                     <span className="stat-title">누적 댓글</span>
-                    <span className="stat-value">{comments.length}건</span>
+                    <span className="stat-value">{Array.isArray(comments) ? comments.length : 0}건</span>
                   </div>
                 </div>
               </div>

@@ -13,6 +13,7 @@ build/
 backend/.env
 *.env
 *.env.local
+!frontend/.env.production
 
 # SQLite Database WAL & Journal files (database.sqlite itself can be excluded or included)
 *.sqlite-journal

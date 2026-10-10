@@ -1,5 +1,6 @@
 import { BrowserRouter, Routes, Route } from 'react-router-dom';
 import { PostProvider } from './context/PostContext';
+import { ErrorBoundary } from './components/ErrorBoundary';
 import { Layout } from './components/Layout';
 import { HomePage } from './pages/HomePage';
 import { LoginPage } from './pages/LoginPage';
@@ -19,39 +20,49 @@ import './App.css';
 
 function App() {
   return (
-    <PostProvider>
-      <BrowserRouter>
-        <Routes>
-          {/* 1. 일반 사용자 페이지 (공통 레이아웃: Navbar, Footer 적용) */}
-          <Route path="/" element={<Layout />}>
-            <Route index element={<HomePage />} />
-            <Route path="login" element={<LoginPage />} />
-            <Route path="register" element={<RegisterPage />} />
-            <Route path="profile" element={<ProfilePage />} />
-            <Route path="posts" element={<PostListPage />} />
-            <Route path="posts/create" element={<PostCreatePage />} />
-            <Route path="posts/:id" element={<PostDetailPage />} />
-            <Route path="posts/:id/edit" element={<PostEditPage />} />
-            <Route path="auth/callback" element={<AuthCallbackPage />} />
-            <Route path="payment" element={<PaymentPage />} />
-            <Route path="payment/success" element={<PaymentSuccessPage />} />
-            <Route path="payment/fail" element={<PaymentFailPage />} />
-          </Route>
+    <ErrorBoundary>
+      <PostProvider>
+        <BrowserRouter>
+          <Routes>
+            {/* 1. 일반 사용자 페이지 (공통 레이아웃: Navbar, Footer 적용) */}
+            <Route path="/" element={<Layout />}>
+              <Route index element={<HomePage />} />
+              <Route path="login" element={<LoginPage />} />
+              <Route path="register" element={<RegisterPage />} />
+              <Route path="signup" element={<RegisterPage />} />
+              <Route path="profile" element={<ProfilePage />} />
+              <Route path="posts" element={<PostListPage />} />
+              <Route path="posts/create" element={<PostCreatePage />} />
+              <Route path="posts/:id" element={<PostDetailPage />} />
+              <Route path="posts/:id/edit" element={<PostEditPage />} />
+              
+              {/* 레거시 및 호환 라우트 (/board) */}
+              <Route path="board" element={<PostListPage />} />
+              <Route path="board/new" element={<PostCreatePage />} />
+              <Route path="board/:id" element={<PostDetailPage />} />
+              <Route path="board/:id/edit" element={<PostEditPage />} />
 
-          {/* 2. 관리자 전용 독립 페이지 */}
-          <Route path="/admin/login" element={<AdminLoginPage />} />
-          <Route path="/admin" element={<AdminDashboardPage />} />
-          <Route path="/admin/posts" element={<AdminDashboardPage defaultCategory="posts" />} />
-          <Route path="/admin/users" element={<AdminDashboardPage defaultCategory="users" />} />
-          <Route path="/admin/comments" element={<AdminDashboardPage defaultCategory="comments" />} />
-          <Route path="/admin/account" element={<AdminDashboardPage defaultCategory="account" />} />
-          <Route path="/admin/system" element={<AdminDashboardPage defaultCategory="system" />} />
+              <Route path="auth/callback" element={<AuthCallbackPage />} />
+              <Route path="payment" element={<PaymentPage />} />
+              <Route path="payment/success" element={<PaymentSuccessPage />} />
+              <Route path="payment/fail" element={<PaymentFailPage />} />
+            </Route>
 
-          {/* 3. 잘못된 경로 처리 */}
-          <Route path="*" element={<HomePage />} />
-        </Routes>
-      </BrowserRouter>
-    </PostProvider>
+            {/* 2. 관리자 전용 독립 페이지 */}
+            <Route path="/admin/login" element={<AdminLoginPage />} />
+            <Route path="/admin" element={<AdminDashboardPage />} />
+            <Route path="/admin/posts" element={<AdminDashboardPage defaultCategory="posts" />} />
+            <Route path="/admin/users" element={<AdminDashboardPage defaultCategory="users" />} />
+            <Route path="/admin/comments" element={<AdminDashboardPage defaultCategory="comments" />} />
+            <Route path="/admin/account" element={<AdminDashboardPage defaultCategory="account" />} />
+            <Route path="/admin/system" element={<AdminDashboardPage defaultCategory="system" />} />
+
+            {/* 3. 잘못된 경로 처리 */}
+            <Route path="*" element={<HomePage />} />
+          </Routes>
+        </BrowserRouter>
+      </PostProvider>
+    </ErrorBoundary>
   );
 }
 
