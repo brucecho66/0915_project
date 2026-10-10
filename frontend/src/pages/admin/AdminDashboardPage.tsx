@@ -45,12 +45,15 @@ export const AdminDashboardPage: React.FC<{ defaultCategory?: AdminCategory }> =
     }
   }, [defaultCategory]);
 
-  // 관리자 대시보드 진입 시 최신 데이터 일괄 조회
+  // 관리자 대시보드 진입 시 최신 데이터 일괄 조회 (effectiveAdmin 변경 시 1회만 호출)
   useEffect(() => {
-    fetchPosts();
-    fetchUsers();
-    fetchAdminComments();
-  }, [fetchPosts, fetchUsers, fetchAdminComments]);
+    if (effectiveAdmin) {
+      fetchPosts();
+      fetchUsers();
+      fetchAdminComments();
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [effectiveAdmin?.id]);
 
   // 계정 변경 폼 상태
   const [formEmail, setFormEmail] = useState(effectiveAdmin?.email || '');
@@ -67,13 +70,110 @@ export const AdminDashboardPage: React.FC<{ defaultCategory?: AdminCategory }> =
   // effectiveAdmin 변경 시 폼 동기화
   useEffect(() => {
     if (effectiveAdmin) {
-      setFormEmail(effectiveAdmin.email);
-      setFormUsername(effectiveAdmin.username);
+      setFormEmail(effectiveAdmin.email || '');
+      setFormUsername(effectiveAdmin.username || '');
       setFormBio(effectiveAdmin.bio || '');
     }
   }, [effectiveAdmin]);
 
-  // 비인가 사용자 접근 차단 (effectiveAdmin이 없을 때만 안내)
+  // 관리자가 users 목록에 누락되어 있다면 effectiveAdmin을 목록에 자동 병합 (Rules of Hooks 준수를 위해 상단 배치)
+  const displayUsers = React.useMemo(() => {
+    const list = Array.isArray(users) ? [...users] : [];
+    const adminEmail = (effectiveAdmin?.email || 'iicbruce@naver.com').toLowerCase();
+    const hasAdmin = list.some(
+      (u) => u.role === 'admin' || ((u.email || '').toLowerCase() === adminEmail)
+    );
+    if (!hasAdmin && effectiveAdmin) {
+      list.unshift({
+        id: effectiveAdmin.id || 8,
+        email: effectiveAdmin.email || '',
+        username: effectiveAdmin.username || 'bodyguard',
+        name: effectiveAdmin.name || effectiveAdmin.username || 'bodyguard',
+        nickname: effectiveAdmin.nickname || effectiveAdmin.username || 'bodyguard',
+        phone: effectiveAdmin.phone || '',
+        role: 'admin',
+        bio: effectiveAdmin.bio || '시스템 총괄 최고관리자 계정입니다.',
+        joinedAt: effectiveAdmin.joinedAt || '2026-09-28',
+        hasUser: true,
+        hasAdmin: true,
+        hasProfile: true,
+        sourceTable: 'admins',
+        statusType: 'admin',
+      });
+    }
+    return list;
+  }, [users, effectiveAdmin]);
+
+  const filteredUsers = React.useMemo(() => {
+    const q = (userSearch || '').trim().toLowerCase();
+    return displayUsers
+      .filter((u) => {
+        if (!u) return false;
+        const uUsername = (u.username || '').toLowerCase();
+        const uEmail = (u.email || '').toLowerCase();
+        const uName = (u.name || '').toLowerCase();
+        const uNickname = (u.nickname || '').toLowerCase();
+        const uPhone = u.phone || '';
+
+        const matchesSearch =
+          !q ||
+          uUsername.includes(q) ||
+          uName.includes(q) ||
+          uNickname.includes(q) ||
+          uPhone.includes(q) ||
+          uEmail.includes(q);
+
+        if (!matchesSearch) return false;
+        if (userRoleFilter === 'admin') return u.role === 'admin';
+        if (userRoleFilter === 'user') return u.role !== 'admin';
+        if (userRoleFilter === 'user_only') return u.statusType === 'user_only';
+        if (userRoleFilter === 'profile_only') return u.statusType === 'profile_only';
+        return true;
+      })
+      .sort((a, b) => {
+        if (a.role === 'admin' && b.role !== 'admin') return -1;
+        if (a.role !== 'admin' && b.role === 'admin') return 1;
+        return (Number(b.id) || 0) - (Number(a.id) || 0);
+      });
+  }, [displayUsers, userSearch, userRoleFilter]);
+
+  const filteredPosts = React.useMemo(() => {
+    const q = (postSearch || '').trim().toLowerCase();
+    return (Array.isArray(posts) ? posts : []).filter((p) => {
+      if (!p) return false;
+      const title = (p.title || '').toLowerCase();
+      const author = (p.author || '').toLowerCase();
+      const content = (p.content || '').toLowerCase();
+
+      const matchesSearch = !q || title.includes(q) || author.includes(q) || content.includes(q);
+      if (!matchesSearch) return false;
+      if (postFilter === 'visible') return !p.isHidden;
+      if (postFilter === 'hidden') return Boolean(p.isHidden);
+      return true;
+    });
+  }, [posts, postSearch, postFilter]);
+
+  const filteredComments = React.useMemo(() => {
+    const q = (commentSearch || '').trim().toLowerCase();
+    return (Array.isArray(comments) ? comments : []).filter((c) => {
+      if (!c) return false;
+      const author = (c.author || '').toLowerCase();
+      const content = (c.content || '').toLowerCase();
+      const postTitle = (c.postTitle || '').toLowerCase();
+
+      const matchesSearch = !q || author.includes(q) || content.includes(q) || postTitle.includes(q);
+      if (!matchesSearch) return false;
+      if (commentFilter === 'visible') return !c.isHidden;
+      if (commentFilter === 'hidden') return Boolean(c.isHidden);
+      return true;
+    });
+  }, [comments, commentSearch, commentFilter]);
+
+  const totalViews = Array.isArray(posts)
+    ? posts.reduce((sum, p) => sum + (Number(p.views) || 0), 0)
+    : 0;
+
+  // 비인가 사용자 접근 차단 (모든 훅 실행 완료 후 안전하게 가드 렌더링)
   if (!effectiveAdmin) {
     return (
       <div className="admin-auth-guard">
@@ -129,83 +229,6 @@ export const AdminDashboardPage: React.FC<{ defaultCategory?: AdminCategory }> =
     adminLogout();
     navigate('/admin/login');
   };
-
-  const totalViews = posts.reduce((sum, p) => sum + p.views, 0);
-
-  // 검색 및 공개/숨김 필터링
-  const filteredPosts = posts.filter((p) => {
-    const matchesSearch =
-      p.title.toLowerCase().includes(postSearch.toLowerCase()) ||
-      p.author.toLowerCase().includes(postSearch.toLowerCase()) ||
-      p.content.toLowerCase().includes(postSearch.toLowerCase());
-
-    if (!matchesSearch) return false;
-    if (postFilter === 'visible') return !p.isHidden;
-    if (postFilter === 'hidden') return Boolean(p.isHidden);
-    return true;
-  });
-
-  // 관리자가 users 목록에 누락되어 있다면 effectiveAdmin을 목록에 자동 병합
-  const displayUsers = React.useMemo(() => {
-    let list = [...users];
-    const adminEmail = (effectiveAdmin?.email || 'iicbruce@naver.com').toLowerCase();
-    const hasAdmin = list.some(
-      (u) => u.role === 'admin' || (u.email && u.email.toLowerCase() === adminEmail)
-    );
-    if (!hasAdmin && effectiveAdmin) {
-      list.unshift({
-        id: effectiveAdmin.id || 8,
-        email: effectiveAdmin.email,
-        username: effectiveAdmin.username,
-        name: effectiveAdmin.name || effectiveAdmin.username,
-        nickname: effectiveAdmin.nickname || effectiveAdmin.username,
-        phone: effectiveAdmin.phone || '',
-        role: 'admin',
-        bio: effectiveAdmin.bio || '시스템 총괄 최고관리자 계정입니다.',
-        joinedAt: effectiveAdmin.joinedAt || '2026-09-28',
-        hasUser: true,
-        hasAdmin: true,
-        hasProfile: true,
-        sourceTable: 'admins',
-        statusType: 'admin',
-      });
-    }
-    return list;
-  }, [users, effectiveAdmin]);
-
-  const filteredUsers = displayUsers
-    .filter((u) => {
-      const matchesSearch =
-        u.username.toLowerCase().includes(userSearch.toLowerCase()) ||
-        (u.name && u.name.toLowerCase().includes(userSearch.toLowerCase())) ||
-        (u.nickname && u.nickname.toLowerCase().includes(userSearch.toLowerCase())) ||
-        (u.phone && u.phone.includes(userSearch)) ||
-        u.email.toLowerCase().includes(userSearch.toLowerCase());
-      if (!matchesSearch) return false;
-      if (userRoleFilter === 'admin') return u.role === 'admin';
-      if (userRoleFilter === 'user') return u.role !== 'admin';
-      if (userRoleFilter === 'user_only') return u.statusType === 'user_only';
-      if (userRoleFilter === 'profile_only') return u.statusType === 'profile_only';
-      return true;
-    })
-    .sort((a, b) => {
-      // 👑 최고관리자 목록 상단 우선 정렬
-      if (a.role === 'admin' && b.role !== 'admin') return -1;
-      if (a.role !== 'admin' && b.role === 'admin') return 1;
-      return (Number(b.id) || 0) - (Number(a.id) || 0);
-    });
-
-  const filteredComments = comments.filter((c) => {
-    const matchesSearch =
-      c.author.toLowerCase().includes(commentSearch.toLowerCase()) ||
-      c.content.toLowerCase().includes(commentSearch.toLowerCase()) ||
-      (c.postTitle && c.postTitle.toLowerCase().includes(commentSearch.toLowerCase()));
-
-    if (!matchesSearch) return false;
-    if (commentFilter === 'visible') return !c.isHidden;
-    if (commentFilter === 'hidden') return Boolean(c.isHidden);
-    return true;
-  });
 
   // 관리자 계정 정보 및 비밀번호 변경 제출 핸들러
   const handleUpdateAccount = async (e: React.FormEvent) => {
@@ -461,13 +484,13 @@ export const AdminDashboardPage: React.FC<{ defaultCategory?: AdminCategory }> =
                     </button>
                   </div>
                   <div className="admin-mini-list">
-                    {users.map((u) => (
+                    {users.slice(0, 5).map((u) => (
                       <div key={u.id} className="admin-mini-item">
                         <div className="mini-item-left">
                           <span className={`role-badge ${u.role === 'admin' ? 'admin' : 'user'}`}>
                             {u.role === 'admin' ? '관리자' : '일반'}
                           </span>
-                          <span className="mini-title">{u.username}</span>
+                          <span className="mini-title">{u.nickname || u.username}</span>
                         </div>
                         <span className="text-muted">{u.email}</span>
                       </div>

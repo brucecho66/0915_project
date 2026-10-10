@@ -728,7 +728,8 @@ export const PostProvider: React.FC<{ children: React.ReactNode }> = ({ children
       fetchUsers();
       fetchAdminComments();
     }
-  }, [adminToken, userToken, fetchUsers, fetchAdminComments]);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [adminToken, userToken]);
 
   // 회원 강제 삭제 (실제 Supabase DB)
   const deleteUser = async (id: number) => {
