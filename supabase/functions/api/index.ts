@@ -338,11 +338,26 @@ const loginHandler = async (c: any) => {
     }
 
     const trimmedEmail = email.trim().toLowerCase();
-    const { data: user } = await supabase
-      .from("users")
+    
+    // 1. 관리자 전용 테이블(admins) 우선 확인
+    const { data: adminUser } = await supabase
+      .from("admins")
       .select("*")
       .eq("email", trimmedEmail)
       .maybeSingle();
+
+    let user: any = adminUser;
+    let isAdminTable = !!adminUser;
+
+    // 2. 일반 유저 테이블(users) 확인
+    if (!user) {
+      const { data: regularUser } = await supabase
+        .from("users")
+        .select("*")
+        .eq("email", trimmedEmail)
+        .maybeSingle();
+      user = regularUser;
+    }
 
     if (!user) {
       // Supabase Auth 폴백 로그인 및 복구
@@ -410,8 +425,19 @@ const loginHandler = async (c: any) => {
     // 평문 비밀번호 자동 bcrypt 업그레이드
     if (!user.password.startsWith("$2")) {
       const hashed = bcrypt.hashSync(password, BCRYPT_SALT_ROUNDS);
-      await supabase.from("users").update({ password: hashed }).eq("id", user.id);
+      if (isAdminTable) {
+        await supabase.from("admins").update({ password: hashed }).eq("id", user.id);
+      } else {
+        await supabase.from("users").update({ password: hashed }).eq("id", user.id);
+      }
     }
+
+    // profiles 테이블에서 프로필 상세 조회
+    const { data: profile } = await supabase
+      .from("profiles")
+      .select("bio, avatar_url")
+      .eq("email", user.email)
+      .maybeSingle();
 
     const userData = {
       id: user.id,
@@ -420,8 +446,8 @@ const loginHandler = async (c: any) => {
       email: user.email,
       username: user.username,
       role: user.role,
-      bio: user.bio,
-      avatarUrl: user.avatar_url || "",
+      bio: profile?.bio || user.bio || "",
+      avatarUrl: profile?.avatar_url || user.avatar_url || "",
       joinedAt: formatDate(user.created_at),
     };
 
@@ -446,13 +472,28 @@ const meHandler = async (c: any) => {
     if (!userPayload) return c.json({ error: "인증 토큰이 누락되었거나 유효하지 않습니다." }, 401);
 
     const supabase = getSupabaseClient();
-    const { data: user } = await supabase
-      .from("users")
+    let { data: user } = await supabase
+      .from("admins")
       .select("*")
       .eq("id", userPayload.id)
       .maybeSingle();
 
+    if (!user) {
+      const { data: regUser } = await supabase
+        .from("users")
+        .select("*")
+        .eq("id", userPayload.id)
+        .maybeSingle();
+      user = regUser;
+    }
+
     if (!user) return c.json({ error: "회원 정보를 찾을 수 없습니다." }, 404);
+
+    const { data: profile } = await supabase
+      .from("profiles")
+      .select("bio, avatar_url")
+      .eq("email", user.email)
+      .maybeSingle();
 
     return c.json({
       success: true,
@@ -463,8 +504,8 @@ const meHandler = async (c: any) => {
         email: user.email,
         username: user.username,
         role: user.role,
-        bio: user.bio,
-        avatarUrl: user.avatar_url || "",
+        bio: profile?.bio || user.bio || "",
+        avatarUrl: profile?.avatar_url || user.avatar_url || "",
         joinedAt: formatDate(user.created_at),
       },
     });
@@ -498,8 +539,15 @@ const profileHandler = async (c: any) => {
     }
 
     const supabase = getSupabaseClient();
+    const { data: adminUser } = await supabase
+      .from("admins")
+      .select("id")
+      .eq("id", userPayload.id)
+      .maybeSingle();
+
+    const targetTable = adminUser ? "admins" : "users";
     let updateRes = await supabase
-      .from("users")
+      .from(targetTable)
       .update(updatePayload)
       .eq("id", userPayload.id)
       .select("*")
@@ -508,7 +556,7 @@ const profileHandler = async (c: any) => {
     if (updateRes.error && (updateRes.error.message?.includes("avatar_url") || updateRes.error.code === "PGRST204")) {
       const { avatar_url: _discard, ...fallbackUpdate } = updatePayload;
       updateRes = await supabase
-        .from("users")
+        .from(targetTable)
         .update(fallbackUpdate)
         .eq("id", userPayload.id)
         .select("*")
@@ -525,13 +573,13 @@ const profileHandler = async (c: any) => {
     try {
       await supabase.from("profiles").upsert(
         {
-          user_id: updated.id,
           email: updated.email,
           username: updated.username,
           bio: updated.bio || "",
           avatar_url: updated.avatar_url || "",
-          role: updated.role || "user",
+          role: updated.role || (adminUser ? "admin" : "user"),
           updated_at: new Date().toISOString(),
+          ...(adminUser ? { admin_id: updated.id } : { user_id: updated.id }),
         },
         { onConflict: "email" }
       );
@@ -987,6 +1035,11 @@ const commentsListHandler = async (c: any) => {
 
     const formatted = visibleComments.map((comm: any) => ({
       ...comm,
+      postId: comm.post_id,
+      userId: comm.author_id,
+      authorId: comm.author_id,
+      isHidden: !!comm.is_hidden,
+      isMasked: comm.is_hidden && !isAdmin && (!user?.id || comm.author_id !== user.id),
       createdAt: formatDateTime(comm.created_at),
       date: formatDateTime(comm.created_at),
     }));
@@ -1005,7 +1058,7 @@ const commentCreateHandler = async (c: any) => {
     const postId = Number(c.req.param("id"));
     const user = getUserFromToken(c.req.header("Authorization"));
     const body = await c.req.json();
-    const { content, author, authorEmail, author_id } = body;
+    const { content, author, authorEmail, author_id, userId } = body;
 
     if (!content || !content.trim()) {
       return c.json({ error: "댓글 내용을 입력해주세요." }, 400);
@@ -1013,7 +1066,7 @@ const commentCreateHandler = async (c: any) => {
 
     const commentAuthor = user?.username || author || "익명";
     const commentAuthorEmail = user?.email || authorEmail || "";
-    const commentAuthorId = user?.id || (author_id ? Number(author_id) : null);
+    const commentAuthorId = user?.id || (userId ? Number(userId) : (author_id ? Number(author_id) : null));
 
     const supabase = getSupabaseClient();
     const { data: newComment, error } = await supabase
@@ -1035,6 +1088,10 @@ const commentCreateHandler = async (c: any) => {
       success: true,
       comment: {
         ...newComment,
+        postId: newComment.post_id,
+        userId: newComment.author_id,
+        authorId: newComment.author_id,
+        isHidden: !!newComment.is_hidden,
         createdAt: formatDateTime(newComment.created_at),
         date: formatDateTime(newComment.created_at),
       },
@@ -1159,15 +1216,28 @@ const adminLoginHandler = async (c: any) => {
     if (!email || !password) return c.json({ error: "이메일과 비밀번호를 입력해주세요." }, 400);
 
     const supabase = getSupabaseClient();
-    const { data: user } = await supabase
-      .from("users")
+    const trimmedEmail = email.trim().toLowerCase();
+
+    // 1. 관리자 전용 테이블(admins) 우선 확인
+    let { data: user } = await supabase
+      .from("admins")
       .select("*")
-      .eq("email", email.trim().toLowerCase())
+      .eq("email", trimmedEmail)
       .maybeSingle();
+
+    // 2. 일반 users 테이블 폴백 확인
+    if (!user) {
+      const { data: regUser } = await supabase
+        .from("users")
+        .select("*")
+        .eq("email", trimmedEmail)
+        .maybeSingle();
+      user = regUser;
+    }
 
     if (!user) return c.json({ error: "관리자 계정을 찾을 수 없습니다." }, 401);
 
-    const isAdmin = user.role === "admin" || email.trim().toLowerCase() === (Deno.env.get("ADMIN_EMAIL") || "iicbruce@naver.com").toLowerCase();
+    const isAdmin = user.role === "admin" || trimmedEmail === (Deno.env.get("ADMIN_EMAIL") || "iicbruce@naver.com").toLowerCase();
     if (!isAdmin) return c.json({ error: "관리자 계정만 로그인할 수 있습니다." }, 403);
 
     const isPasswordValid = user.password.startsWith("$2")
@@ -1176,6 +1246,13 @@ const adminLoginHandler = async (c: any) => {
 
     if (!isPasswordValid) return c.json({ error: "비밀번호가 일치하지 않습니다." }, 401);
 
+    // profiles 테이블에서 프로필 상세 조회
+    const { data: profile } = await supabase
+      .from("profiles")
+      .select("bio, avatar_url")
+      .eq("email", user.email)
+      .maybeSingle();
+
     const formattedAdmin = {
       id: user.id,
       name: user.username,
@@ -1183,8 +1260,8 @@ const adminLoginHandler = async (c: any) => {
       email: user.email,
       username: user.username,
       role: "admin",
-      bio: user.bio,
-      avatarUrl: user.avatar_url || "",
+      bio: profile?.bio || user.bio || "",
+      avatarUrl: profile?.avatar_url || user.avatar_url || "",
       joinedAt: formatDate(user.created_at),
     };
 
@@ -1229,7 +1306,13 @@ const adminAccountUpdateHandler = async (c: any) => {
     const { email, username, bio, currentPassword, newPassword } = await c.req.json();
     const supabase = getSupabaseClient();
 
-    const { data: dbAdmin } = await supabase.from("users").select("*").eq("id", admin.id).maybeSingle();
+    let { data: dbAdmin } = await supabase.from("admins").select("*").eq("id", admin.id).maybeSingle();
+    let isAdminTable = true;
+    if (!dbAdmin) {
+      const { data: dbUser } = await supabase.from("users").select("*").eq("id", admin.id).maybeSingle();
+      dbAdmin = dbUser;
+      isAdminTable = false;
+    }
     if (!dbAdmin) return c.json({ error: "관리자 계정을 찾을 수 없습니다." }, 404);
 
     if (newPassword || (email && email !== dbAdmin.email)) {
@@ -1252,8 +1335,9 @@ const adminAccountUpdateHandler = async (c: any) => {
       updatedPasswordHash = bcrypt.hashSync(newPassword, BCRYPT_SALT_ROUNDS);
     }
 
+    const targetTable = isAdminTable ? "admins" : "users";
     const { error: updateError } = await supabase
-      .from("users")
+      .from(targetTable)
       .update({
         email: updatedEmail,
         username: updatedUsername,
@@ -1263,6 +1347,21 @@ const adminAccountUpdateHandler = async (c: any) => {
       .eq("id", admin.id);
 
     if (updateError) return c.json({ error: "관리자 정보 갱신 실패" }, 500);
+
+    // profiles 분리 테이블 동기화
+    try {
+      await supabase.from("profiles").upsert(
+        {
+          admin_id: admin.id,
+          email: updatedEmail,
+          username: updatedUsername,
+          bio: updatedBio,
+          role: "admin",
+          updated_at: new Date().toISOString(),
+        },
+        { onConflict: "email" }
+      );
+    } catch {}
 
     const newToken = jwt.sign(
       { id: admin.id, email: updatedEmail, username: updatedUsername, role: "admin" },
@@ -1296,8 +1395,9 @@ const adminStatsHandler = async (c: any) => {
     if (!admin) return c.json({ error: "관리자 전용 권한이 필요합니다." }, 403);
 
     const supabase = getSupabaseClient();
-    const [usersCount, postsCount, commentsCount, postsData] = await Promise.all([
+    const [usersCount, adminsCount, postsCount, commentsCount, postsData] = await Promise.all([
       supabase.from("users").select("id", { count: "exact", head: true }),
+      supabase.from("admins").select("id", { count: "exact", head: true }),
       supabase.from("posts").select("id", { count: "exact", head: true }),
       supabase.from("comments").select("id", { count: "exact", head: true }),
       supabase.from("posts").select("views, likes"),
@@ -1318,20 +1418,22 @@ const adminStatsHandler = async (c: any) => {
       .order("id", { ascending: false })
       .limit(5);
 
-    const { data: recentUsers } = await supabase
-      .from("users")
-      .select("id, email, username, role, created_at")
-      .order("id", { ascending: false })
-      .limit(5);
+    const [{ data: recentUsers }, { data: recentAdmins }] = await Promise.all([
+      supabase.from("users").select("id, email, username, role, created_at").order("id", { ascending: false }).limit(5),
+      supabase.from("admins").select("id, email, username, role, created_at").order("id", { ascending: false }).limit(5),
+    ]);
+    const mergedRecent = [...(recentAdmins || []), ...(recentUsers || [])]
+      .sort((a, b) => new Date(b.created_at).getTime() - new Date(a.created_at).getTime())
+      .slice(0, 5);
 
     return c.json({
-      totalUsers: usersCount.count || 0,
+      totalUsers: (usersCount.count || 0) + (adminsCount.count || 0),
       totalPosts: postsCount.count || 0,
       totalComments: commentsCount.count || 0,
       totalViews,
       totalLikes,
       recentPosts: (recentPosts || []).map((p: any) => ({ ...p, createdAt: formatDate(p.created_at) })),
-      recentUsers: (recentUsers || []).map((u: any) => ({ ...u, joinedAt: formatDate(u.created_at) })),
+      recentUsers: mergedRecent.map((u: any) => ({ ...u, joinedAt: formatDate(u.created_at) })),
     });
   } catch {
     return c.json({ error: "통계 조회 실패" }, 500);
@@ -1342,19 +1444,23 @@ app.get("/api/admin/stats", adminStatsHandler);
 app.get("/admin/dashboard", adminStatsHandler);
 app.get("/api/admin/dashboard", adminStatsHandler);
 
-// 관리자 회원 목록 조회
+// 관리자 회원 목록 조회 (admins + users 분리 테이블 통합 조회 및 프로필 매핑)
 const adminUsersHandler = async (c: any) => {
   try {
     const admin = getAdminFromToken(c.req.header("Authorization"));
     if (!admin) return c.json({ error: "관리자 전용 권한이 필요합니다." }, 403);
 
     const supabase = getSupabaseClient();
-    const { data: users, error } = await supabase.from("users").select("*").order("id", { ascending: true });
+    const [{ data: adminList }, { data: userList, error }] = await Promise.all([
+      supabase.from("admins").select("*").order("id", { ascending: true }),
+      supabase.from("users").select("*").order("id", { ascending: true }),
+    ]);
     if (error) return c.json({ error: error.message }, 500);
 
-    const [postsRes, commentsRes] = await Promise.all([
+    const [postsRes, commentsRes, profilesRes] = await Promise.all([
       supabase.from("posts").select("author_id, author"),
       supabase.from("comments").select("author_id, author"),
+      supabase.from("profiles").select("*"),
     ]);
 
     const postCountMap: Record<string, number> = {};
@@ -1367,19 +1473,36 @@ const adminUsersHandler = async (c: any) => {
       if (comm.author_id) commentCountMap[comm.author_id] = (commentCountMap[comm.author_id] || 0) + 1;
     });
 
-    const formatted = (users || []).map((u: any) => ({
-      id: u.id,
-      name: u.username,
-      nickname: u.username,
-      username: u.username,
-      email: u.email,
-      role: u.role,
-      bio: u.bio,
-      avatarUrl: u.avatar_url || "",
-      postsCount: postCountMap[u.id] || 0,
-      commentsCount: commentCountMap[u.id] || 0,
-      joinedAt: formatDate(u.created_at),
-    }));
+    const profileMap: Record<string, any> = {};
+    (profilesRes.data || []).forEach((prof: any) => {
+      if (prof.email) profileMap[prof.email.toLowerCase()] = prof;
+    });
+
+    const allMembers = [
+      ...(adminList || []).map((a: any) => ({ ...a, role: "admin", is_admin_table: true })),
+      ...(userList || []).map((u: any) => ({ ...u, role: "user", is_user_table: true })),
+    ];
+
+    const formatted = allMembers.map((u: any) => {
+      const prof = profileMap[u.email?.toLowerCase()] || {};
+      return {
+        id: u.id,
+        name: u.username,
+        nickname: u.username,
+        username: u.username,
+        email: u.email,
+        role: u.role,
+        bio: prof.bio || u.bio || "",
+        avatarUrl: prof.avatar_url || u.avatar_url || "",
+        postsCount: postCountMap[u.id] || 0,
+        commentsCount: commentCountMap[u.id] || 0,
+        joinedAt: formatDate(u.created_at),
+        sourceTable: u.is_admin_table ? "admins" : "users",
+        hasAdmin: !!u.is_admin_table,
+        hasUser: !!u.is_user_table,
+        hasProfile: !!profileMap[u.email?.toLowerCase()],
+      };
+    });
 
     return c.json(formatted);
   } catch {
@@ -1485,13 +1608,23 @@ app.delete("/api/admin/comments/:id", adminDeleteCommentHandler);
 const switchToAdminHandler = async (c: any) => {
   try {
     const supabase = getSupabaseClient();
-    const { data: admin } = await supabase
-      .from("users")
+    let { data: admin } = await supabase
+      .from("admins")
       .select("*")
-      .eq("role", "admin")
       .order("id", { ascending: true })
       .limit(1)
       .maybeSingle();
+
+    if (!admin) {
+      const { data: userAdmin } = await supabase
+        .from("users")
+        .select("*")
+        .eq("role", "admin")
+        .order("id", { ascending: true })
+        .limit(1)
+        .maybeSingle();
+      admin = userAdmin;
+    }
 
     if (!admin) return c.json({ error: "관리자 계정을 찾을 수 없습니다." }, 404);
 
