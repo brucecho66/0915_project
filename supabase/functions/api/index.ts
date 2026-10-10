@@ -137,6 +137,9 @@ const registerHandler = async (c: any) => {
       email_confirm: true,
       user_metadata: {
         username: trimmedUsername,
+        name: trimmedUsername,
+        full_name: trimmedUsername,
+        display_name: trimmedUsername,
         role: "user",
         bio: trimmedBio,
         avatar_url: finalAvatar,
@@ -585,6 +588,25 @@ const profileHandler = async (c: any) => {
       );
     } catch {}
 
+    // Supabase Auth 메타데이터(display_name, name, bio) 동기화
+    try {
+      const { data: authList } = await supabase.auth.admin.listUsers();
+      const authTarget = authList?.users?.find((u: any) => u.email?.toLowerCase() === updated.email?.toLowerCase());
+      if (authTarget?.id) {
+        await supabase.auth.admin.updateUserById(authTarget.id, {
+          user_metadata: {
+            ...authTarget.user_metadata,
+            username: updated.username,
+            name: updated.username,
+            display_name: updated.username,
+            full_name: updated.username,
+            bio: updated.bio || "",
+            avatar_url: updated.avatar_url || "",
+          },
+        });
+      }
+    } catch {}
+
     return c.json({
       success: true,
       user: {
@@ -603,6 +625,10 @@ const profileHandler = async (c: any) => {
     return c.json({ error: "프로필 수정 중 오류가 발생했습니다." }, 500);
   }
 };
+app.put("/profile", profileHandler);
+app.put("/api/profile", profileHandler);
+app.patch("/profile", profileHandler);
+app.patch("/api/profile", profileHandler);
 app.put("/auth/profile", profileHandler);
 app.put("/api/auth/profile", profileHandler);
 app.patch("/auth/me", profileHandler);
