@@ -709,6 +709,8 @@ const postsListHandler = async (c: any) => {
 
     const formatted = visiblePosts.map((p: any) => ({
       ...p,
+      isHidden: Boolean(p.is_hidden),
+      userId: p.author_id || p.user_id,
       views: Number(p.views || 0),
       likes: Number(p.likes || 0),
       dislikes: Number(p.dislikes || 0),
@@ -756,6 +758,8 @@ const postDetailHandler = async (c: any) => {
 
     return c.json({
       ...post,
+      isHidden: Boolean(post.is_hidden),
+      userId: post.author_id || post.user_id,
       views: Number(post.views || 0),
       likes: Number(post.likes || 0),
       dislikes: Number(post.dislikes || 0),
@@ -940,11 +944,14 @@ const postCreateHandler = async (c: any) => {
 
     const formatted = {
       ...newPost,
+      id: newPost.id,
+      isHidden: false,
+      userId: newPost.author_id,
       commentsCount: 0,
       createdAt: formatDate(newPost.created_at),
       date: formatDate(newPost.created_at),
     };
-    return c.json({ success: true, post: formatted }, 201);
+    return c.json({ success: true, post: formatted, ...formatted }, 201);
   } catch (err: any) {
     return c.json({ error: `게시글 작성 오류: ${err.message}` }, 500);
   }

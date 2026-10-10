@@ -63,20 +63,13 @@ interface PostContextType {
 }
 
 const SUPABASE_EDGE_API = 'https://wfvmnouudayelbbomgzs.supabase.co/functions/v1/api';
-const LOCAL_DEV_API = 'http://localhost:5000/api';
 
 const getApiBase = () => {
-  // 1. Vercel 배포 등 실제 도메인 환경에서는 무조건 Supabase Edge Function 사용
-  if (typeof window !== 'undefined' && window.location.hostname !== 'localhost' && window.location.hostname !== '127.0.0.1') {
-    return SUPABASE_EDGE_API;
-  }
-  // 2. 환경 변수가 지정되어 있으면 우선 적용
   const envUrl = ((import.meta as any).env?.VITE_API_URL || '').trim();
   if (envUrl) {
     return envUrl.replace(/\/+$/, '');
   }
-  // 3. 로컬 개발 환경 기본값 (Express + Supabase 로컬 백엔드)
-  return LOCAL_DEV_API;
+  return SUPABASE_EDGE_API;
 };
 
 export const API_BASE = getApiBase();
@@ -196,9 +189,13 @@ export const PostProvider: React.FC<{ children: React.ReactNode }> = ({ children
   // 새 게시글 등록 (실제 Supabase DB 저장)
   const addPost = async (title: string, content: string, author = user?.username || '익명'): Promise<number> => {
     try {
+      const token = userToken || adminToken || localStorage.getItem('user_token') || localStorage.getItem('admin_token');
       const res = await fetch(`${API_BASE}/posts`, {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
+        headers: {
+          'Content-Type': 'application/json',
+          ...(token ? { Authorization: `Bearer ${token}` } : {}),
+        },
         body: JSON.stringify({
           title,
           content,
@@ -208,9 +205,21 @@ export const PostProvider: React.FC<{ children: React.ReactNode }> = ({ children
       });
 
       if (res.ok) {
-        const createdPost: Post = await res.json();
-        setPosts((prev) => [createdPost, ...prev.filter((p) => p.id !== createdPost.id)]);
-        return createdPost.id;
+        const data = await res.json();
+        const postObj: any = data.post || (data.id ? data : null);
+        if (postObj && postObj.id) {
+          const createdPost: Post = {
+            ...postObj,
+            id: Number(postObj.id),
+            isHidden: Boolean(postObj.isHidden ?? postObj.is_hidden),
+            userId: postObj.userId ?? postObj.author_id ?? user?.id ?? null,
+            views: Number(postObj.views || 0),
+            likes: Number(postObj.likes || 0),
+            dislikes: Number(postObj.dislikes || 0),
+          };
+          setPosts((prev) => [createdPost, ...prev.filter((p) => p.id !== createdPost.id)]);
+          return createdPost.id;
+        }
       }
     } catch (err) {
       console.error('게시글 등록 실패:', err);

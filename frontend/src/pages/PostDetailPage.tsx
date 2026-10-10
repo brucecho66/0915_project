@@ -51,6 +51,11 @@ export const PostDetailPage: React.FC = () => {
   useEffect(() => {
     if (!id) return;
     const postId = Number(id);
+    if (isNaN(postId)) {
+      setIsLoading(false);
+      setPost(undefined);
+      return;
+    }
 
     // 캐시에 데이터가 있으면 즉시 상태에 반영
     const existing = getPost(postId);
@@ -77,31 +82,52 @@ export const PostDetailPage: React.FC = () => {
 
     const loadDetail = async () => {
       try {
-        // 1. 조회수 증가 API 우선 실행 (DB views 증가 및 Context posts 상태 동기화)
-        const viewCount = await incrementPostView(postId);
-
-        // 2. 게시글 상세 정보 및 댓글 목록 조회
-        const [postData, commentsData] = await Promise.all([
-          fetch(postUrl, { headers: authHeaders }).then(async (res) => (res.ok ? await res.json() : null)),
-          fetch(`${API_BASE}/posts/${postId}/comments`, { headers: authHeaders }).then(async (res) => (res.ok ? await res.json() : [])),
+        // 1. 게시글 상세 정보 및 댓글 목록을 독립적으로 신속 조회
+        const [postRes, commentsRes] = await Promise.allSettled([
+          fetch(postUrl, { headers: authHeaders }),
+          fetch(`${API_BASE}/posts/${postId}/comments`, { headers: authHeaders }),
         ]);
 
+        let fetchedPost: any = null;
+        if (postRes.status === 'fulfilled' && postRes.value.ok) {
+          fetchedPost = await postRes.value.json();
+        }
+
+        let fetchedComments: any[] = [];
+        if (commentsRes.status === 'fulfilled' && commentsRes.value.ok) {
+          fetchedComments = await commentsRes.value.json();
+        }
+
         if (isCurrent) {
-          if (postData) {
-            const finalViews = typeof viewCount === 'number' && viewCount > 0
-              ? Math.max(postData.views || 0, viewCount)
-              : Math.max((postData.views || 0) + 1, 1);
-            setPost({ ...postData, views: finalViews });
-            setLikes(postData.likes || 0);
-            setDislikes(postData.dislikes || 0);
-            setUserReaction(postData.userReaction || null);
+          if (fetchedPost) {
+            const normalized: Post = {
+              ...fetchedPost,
+              id: Number(fetchedPost.id),
+              isHidden: Boolean(fetchedPost.isHidden ?? fetchedPost.is_hidden),
+              userId: fetchedPost.userId ?? fetchedPost.author_id ?? fetchedPost.user_id,
+              views: Number(fetchedPost.views || 0),
+              likes: Number(fetchedPost.likes || 0),
+              dislikes: Number(fetchedPost.dislikes || 0),
+              createdAt: fetchedPost.createdAt || fetchedPost.created_at || '',
+            };
+            setPost(normalized);
+            setLikes(normalized.likes);
+            setDislikes(normalized.dislikes || 0);
+            setUserReaction(normalized.userReaction || null);
           } else if (!existing) {
             setPost(undefined);
           }
-          if (commentsData) {
-            setComments(commentsData);
+          if (Array.isArray(fetchedComments)) {
+            setComments(fetchedComments);
           }
         }
+
+        // 2. 조회수 증가는 논블로킹으로 실행하여 본문 열림을 지연/차단하지 않음
+        incrementPostView(postId).then((vCount) => {
+          if (isCurrent && typeof vCount === 'number' && vCount > 0) {
+            setPost((prev) => prev ? { ...prev, views: Math.max(prev.views, vCount) } : prev);
+          }
+        }).catch(() => {});
       } catch (err) {
         console.error('게시글 및 댓글 조회 실패:', err);
       } finally {

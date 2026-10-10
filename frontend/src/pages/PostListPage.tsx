@@ -14,19 +14,23 @@ export const PostListPage: React.FC = () => {
   const isAdmin = user?.role === 'admin' || !!adminUser;
 
   // 일반 사용자에게는 관리자에 의해 숨김 처리된 게시글 숨김 (본인 작성 글이나 관리자는 열람 가능)
-  const visiblePosts = posts.filter((p) => {
-    if (p.isHidden && !isAdmin && p.author !== user?.username && p.userId !== user?.id) {
+  const visiblePosts = (Array.isArray(posts) ? posts : []).filter((p) => {
+    if (!p) return false;
+    const isHidden = Boolean(p.isHidden ?? (p as any).is_hidden);
+    if (isHidden && !isAdmin && p.author !== user?.username && p.userId !== user?.id) {
       return false;
     }
     return true;
   });
 
-  const filteredPosts = visiblePosts.filter(
-    (p) =>
-      p.title.toLowerCase().includes(searchTerm.toLowerCase()) ||
-      p.author.toLowerCase().includes(searchTerm.toLowerCase()) ||
-      p.content.toLowerCase().includes(searchTerm.toLowerCase())
-  );
+  const q = searchTerm.trim().toLowerCase();
+  const filteredPosts = visiblePosts.filter((p) => {
+    if (!p) return false;
+    const title = (p.title || '').toLowerCase();
+    const author = (p.author || '').toLowerCase();
+    const content = (p.content || '').toLowerCase();
+    return !q || title.includes(q) || author.includes(q) || content.includes(q);
+  });
 
   return (
     <div className="page-posts">
