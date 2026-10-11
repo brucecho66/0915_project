@@ -34,9 +34,12 @@ export const AuthCallbackPage: React.FC = () => {
         if (setUser) setUser(formattedUser);
         if (setUserToken) setUserToken(data.session.access_token);
 
+        const expiresAt = Date.now() + 24 * 60 * 60 * 1000;
         localStorage.setItem('user_data', JSON.stringify(formattedUser));
         localStorage.setItem('user', JSON.stringify(formattedUser));
         localStorage.setItem('user_token', data.session.access_token);
+        localStorage.setItem('session_expires_at', String(expiresAt));
+        localStorage.setItem('session_login_at', String(Date.now()));
 
         setStatusMessage('로그인이 완료되었습니다! 메인 페이지로 이동합니다.');
         setTimeout(() => navigate('/posts'), 800);

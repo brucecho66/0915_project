@@ -4,7 +4,7 @@ import { usePosts } from '../context/PostContext';
 import profileImg from '../assets/images/profile.jpg';
 
 export const Navbar: React.FC = () => {
-  const { user, logout, switchToAdmin, switchToUser } = usePosts();
+  const { user, logout, switchToAdmin, switchToUser, sessionRemainingMinutes } = usePosts();
   const [isSwitching, setIsSwitching] = useState(false);
   const navigate = useNavigate();
 
@@ -116,6 +116,22 @@ export const Navbar: React.FC = () => {
               <Link to="/profile" className="nav-profile-btn" style={{ padding: '0.35rem 0.75rem', borderRadius: '6px', background: '#f3f4f6', color: '#374151', textDecoration: 'none', fontSize: '0.875rem', fontWeight: 600 }} title="내 정보 및 내가 쓴 글 확인">
                 👤 내 정보
               </Link>
+              {sessionRemainingMinutes > 0 && (
+                <span
+                  style={{
+                    fontSize: '0.78rem',
+                    color: '#475569',
+                    padding: '0.3rem 0.6rem',
+                    borderRadius: '6px',
+                    backgroundColor: '#f1f5f9',
+                    border: '1px solid #e2e8f0',
+                    fontWeight: 600,
+                  }}
+                  title={`로그인 세션은 24시간 동안 유지됩니다. (만료까지 약 ${Math.floor(sessionRemainingMinutes / 60)}시간 ${sessionRemainingMinutes % 60}분 남음)`}
+                >
+                  ⏱️ {Math.floor(sessionRemainingMinutes / 60)}h {sessionRemainingMinutes % 60}m
+                </span>
+              )}
               <button onClick={handleLogout} className="btn-logout">
                 로그아웃
               </button>

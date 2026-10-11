@@ -25,6 +25,10 @@ export const AdminDashboardPage: React.FC<{ defaultCategory?: AdminCategory }> =
     updateAdminAccount,
     user,
     switchToAdmin,
+    sessionRemainingMinutes,
+    dashboardStats,
+    isLoadingDashboardStats,
+    fetchDashboardStats,
   } = usePosts();
 
   const navigate = useNavigate();
@@ -45,9 +49,10 @@ export const AdminDashboardPage: React.FC<{ defaultCategory?: AdminCategory }> =
     }
   }, [defaultCategory]);
 
-  // 관리자 대시보드 진입 시 최신 데이터 일괄 조회 (effectiveAdmin 변경 시 1회만 호출)
+  // 관리자 대시보드 진입 시 Supabase DB 최신 통계 및 데이터 일괄 조회
   useEffect(() => {
     if (effectiveAdmin) {
+      fetchDashboardStats();
       fetchPosts();
       fetchUsers();
       fetchAdminComments();
@@ -172,6 +177,31 @@ export const AdminDashboardPage: React.FC<{ defaultCategory?: AdminCategory }> =
   const totalViews = Array.isArray(posts)
     ? posts.reduce((sum, p) => sum + (Number(p.views) || 0), 0)
     : 0;
+
+  // Supabase DB 실시간 집계 수치 (dashboardStats 우선 사용, fallback으로 프론트 상태)
+  const currentTotalViews = dashboardStats?.totalViews ?? totalViews;
+  const currentTotalPosts = dashboardStats?.totalPosts ?? (Array.isArray(posts) ? posts.length : 0);
+  const currentTotalUsers = dashboardStats?.totalUsers ?? (Array.isArray(displayUsers) ? displayUsers.length : 0);
+  const currentTotalComments = dashboardStats?.totalComments ?? (Array.isArray(comments) ? comments.length : 0);
+  const currentTotalLikes = dashboardStats?.totalLikes ?? (Array.isArray(posts) ? posts.reduce((sum, p) => sum + (Number(p.likes) || 0), 0) : 0);
+  const currentTodayPosts = dashboardStats?.todayPosts ?? 0;
+  const currentTodayUsers = dashboardStats?.todayUsers ?? 0;
+
+  // Supabase 데이터 수동 새로고침 상태 및 핸들러
+  const [isRefreshing, setIsRefreshing] = useState(false);
+  const handleRefreshSupabase = async () => {
+    setIsRefreshing(true);
+    try {
+      await Promise.all([
+        fetchDashboardStats(),
+        fetchPosts(),
+        fetchUsers(),
+        fetchAdminComments(),
+      ]);
+    } finally {
+      setIsRefreshing(false);
+    }
+  };
 
   // 비인가 사용자 접근 차단 (모든 훅 실행 완료 후 안전하게 가드 렌더링)
   if (!effectiveAdmin) {
@@ -384,12 +414,14 @@ export const AdminDashboardPage: React.FC<{ defaultCategory?: AdminCategory }> =
               {activeCategory === 'users' && '커뮤니티 회원 관리'}
               {activeCategory === 'comments' && '게시글 댓글 모니터링'}
               {activeCategory === 'account' && '관리자 계정 & 보안 설정 (비밀번호/해시/세션/시크릿)'}
-              {activeCategory === 'system' && '서버 환경변수(.env) 및 SQLite 설정'}
+              {activeCategory === 'system' && '서버 환경변수(.env) 및 Supabase PostgreSQL 설정'}
             </h1>
           </div>
           <div className="admin-header-status">
-            <span className="badge-status-online">🟢 bcrypt 해시 & JWT 보안 활성화</span>
-            <span className="badge-port">PORT: 5000</span>
+            <span className="badge-status-online">🟢 Supabase DB & 24h JWT 보안 활성화</span>
+            <span className="badge-port" title="24시간 세션 유효 기간">
+              ⏱️ 세션 잔여: {Math.floor(sessionRemainingMinutes / 60)}시간 {sessionRemainingMinutes % 60}분
+            </span>
           </div>
         </header>
 
@@ -398,13 +430,96 @@ export const AdminDashboardPage: React.FC<{ defaultCategory?: AdminCategory }> =
           {/* 카테고리 1: 대시보드 홈 */}
           {activeCategory === 'dashboard' && (
             <div className="admin-dashboard-view">
-              {/* 요약 통계 카드 */}
-              <div className="admin-stat-grid">
+              {/* Supabase 실시간 연동 상태 바 및 데이터 새로고침 컨트롤 */}
+              <div
+                style={{
+                  display: 'flex',
+                  justifyContent: 'space-between',
+                  alignItems: 'center',
+                  padding: '1rem 1.25rem',
+                  backgroundColor: '#ffffff',
+                  borderRadius: '12px',
+                  marginBottom: '1.5rem',
+                  border: '1px solid #e2e8f0',
+                  boxShadow: '0 1px 3px rgba(0,0,0,0.05)',
+                  flexWrap: 'wrap',
+                  gap: '0.75rem',
+                }}
+              >
+                <div style={{ display: 'flex', alignItems: 'center', gap: '0.75rem', flexWrap: 'wrap' }}>
+                  <span
+                    style={{
+                      display: 'inline-flex',
+                      alignItems: 'center',
+                      gap: '0.4rem',
+                      padding: '0.35rem 0.75rem',
+                      borderRadius: '20px',
+                      backgroundColor: '#ecfdf5',
+                      color: '#065f46',
+                      fontWeight: 600,
+                      fontSize: '0.85rem',
+                      border: '1px solid #a7f3d0',
+                    }}
+                  >
+                    🟢 Supabase Cloud DB 실시간 연동
+                  </span>
+                  <span
+                    style={{
+                      display: 'inline-flex',
+                      alignItems: 'center',
+                      gap: '0.35rem',
+                      padding: '0.35rem 0.75rem',
+                      borderRadius: '20px',
+                      backgroundColor: '#eff6ff',
+                      color: '#1e40af',
+                      fontWeight: 600,
+                      fontSize: '0.85rem',
+                      border: '1px solid #bfdbfe',
+                    }}
+                  >
+                    ⏱️ 24시간 세션 유지 ({Math.floor(sessionRemainingMinutes / 60)}시간 {sessionRemainingMinutes % 60}분 남음)
+                  </span>
+                  {dashboardStats?.lastUpdated && (
+                    <span style={{ color: '#64748b', fontSize: '0.85rem' }}>
+                      최근 동기화: <strong>{dashboardStats.lastUpdated}</strong>
+                    </span>
+                  )}
+                </div>
+
+                <button
+                  type="button"
+                  onClick={handleRefreshSupabase}
+                  disabled={isRefreshing || isLoadingDashboardStats}
+                  style={{
+                    display: 'inline-flex',
+                    alignItems: 'center',
+                    gap: '0.4rem',
+                    padding: '0.5rem 1rem',
+                    borderRadius: '8px',
+                    border: '1px solid #cbd5e1',
+                    backgroundColor: isRefreshing ? '#f1f5f9' : '#ffffff',
+                    color: '#334155',
+                    fontSize: '0.875rem',
+                    fontWeight: 600,
+                    cursor: isRefreshing ? 'not-allowed' : 'pointer',
+                    transition: 'all 0.2s',
+                  }}
+                  title="Supabase DB의 최신 통계와 데이터를 실시간으로 다시 불러옵니다"
+                >
+                  <span style={{ display: 'inline-block', transform: isRefreshing ? 'rotate(360deg)' : 'none', transition: 'transform 0.6s' }}>
+                    🔄
+                  </span>
+                  {isRefreshing || isLoadingDashboardStats ? 'DB 동기화 중...' : 'Supabase 데이터 새로고침'}
+                </button>
+              </div>
+
+              {/* Supabase DB 기반 요약 통계 카드 */}
+              <div className="admin-stat-grid" style={{ gridTemplateColumns: 'repeat(auto-fit, minmax(200px, 1fr))' }}>
                 <div className="admin-card-stat">
                   <div className="stat-icon-wrapper blue">📊</div>
                   <div className="stat-info">
                     <span className="stat-title">총 조회수</span>
-                    <span className="stat-value">{(totalViews ?? 0).toLocaleString()}회</span>
+                    <span className="stat-value">{currentTotalViews.toLocaleString()}회</span>
                   </div>
                 </div>
                 <div
@@ -416,7 +531,12 @@ export const AdminDashboardPage: React.FC<{ defaultCategory?: AdminCategory }> =
                   <div className="stat-icon-wrapper green">📝</div>
                   <div className="stat-info">
                     <span className="stat-title">총 게시글</span>
-                    <span className="stat-value">{Array.isArray(posts) ? posts.length : 0}개</span>
+                    <span className="stat-value">{currentTotalPosts.toLocaleString()}개</span>
+                    {currentTodayPosts > 0 && (
+                      <small style={{ color: '#16a34a', fontSize: '0.78rem', marginTop: '2px' }}>
+                        오늘 신규 +{currentTodayPosts}건
+                      </small>
+                    )}
                   </div>
                 </div>
                 <div
@@ -428,7 +548,12 @@ export const AdminDashboardPage: React.FC<{ defaultCategory?: AdminCategory }> =
                   <div className="stat-icon-wrapper purple">👥</div>
                   <div className="stat-info">
                     <span className="stat-title">등록 회원</span>
-                    <span className="stat-value">{Array.isArray(displayUsers) ? displayUsers.length : 0}명</span>
+                    <span className="stat-value">{currentTotalUsers.toLocaleString()}명</span>
+                    {currentTodayUsers > 0 && (
+                      <small style={{ color: '#7c3aed', fontSize: '0.78rem', marginTop: '2px' }}>
+                        오늘 신규 +{currentTodayUsers}명
+                      </small>
+                    )}
                   </div>
                 </div>
                 <div
@@ -440,22 +565,32 @@ export const AdminDashboardPage: React.FC<{ defaultCategory?: AdminCategory }> =
                   <div className="stat-icon-wrapper orange">💬</div>
                   <div className="stat-info">
                     <span className="stat-title">누적 댓글</span>
-                    <span className="stat-value">{Array.isArray(comments) ? comments.length : 0}건</span>
+                    <span className="stat-value">{currentTotalComments.toLocaleString()}건</span>
+                  </div>
+                </div>
+                <div className="admin-card-stat">
+                  <div className="stat-icon-wrapper" style={{ backgroundColor: '#fef2f2', color: '#ef4444' }}>❤️</div>
+                  <div className="stat-info">
+                    <span className="stat-title">총 추천수</span>
+                    <span className="stat-value">{currentTotalLikes.toLocaleString()}개</span>
                   </div>
                 </div>
               </div>
 
-              {/* 최근 게시글 & 회원 요약 */}
+              {/* 최근 게시글 & 회원 요약 (실제 Supabase DB 레코드 기반) */}
               <div className="admin-split-grid">
                 <div className="admin-card">
                   <div className="admin-card-title-row">
-                    <h3>최근 등록 게시글</h3>
+                    <h3>최근 등록 게시글 (Supabase DB)</h3>
                     <button onClick={() => handleSelectCategory('posts')} className="link-btn">
                       전체 관리 &rarr;
                     </button>
                   </div>
                   <div className="admin-mini-list">
-                    {posts.slice(0, 4).map((p) => (
+                    {(dashboardStats?.recentPosts && dashboardStats.recentPosts.length > 0
+                      ? dashboardStats.recentPosts
+                      : posts.slice(0, 5)
+                    ).map((p) => (
                       <Link
                         key={p.id}
                         to={`/posts/${p.id}`}
@@ -465,11 +600,14 @@ export const AdminDashboardPage: React.FC<{ defaultCategory?: AdminCategory }> =
                         <div className="mini-item-left">
                           <span className="mini-id">#{p.id}</span>
                           <span className="mini-title">{p.title}</span>
+                          {p.isHidden && (
+                            <span style={{ fontSize: '0.75rem', color: '#ef4444', marginLeft: '4px' }}>[숨김]</span>
+                          )}
                         </div>
                         <div className="mini-item-right">
                           <span>{p.author}</span>
                           <span className="text-muted">{p.createdAt}</span>
-                          <span className="mini-badge-view">게시글 확인 &rarr;</span>
+                          <span className="mini-badge-view">조회 {p.views ?? 0}</span>
                         </div>
                       </Link>
                     ))}
@@ -478,13 +616,16 @@ export const AdminDashboardPage: React.FC<{ defaultCategory?: AdminCategory }> =
 
                 <div className="admin-card">
                   <div className="admin-card-title-row">
-                    <h3>가입 회원 목록</h3>
+                    <h3>가입 회원 목록 (Supabase DB)</h3>
                     <button onClick={() => handleSelectCategory('users')} className="link-btn">
                       전체 관리 &rarr;
                     </button>
                   </div>
                   <div className="admin-mini-list">
-                    {users.slice(0, 5).map((u) => (
+                    {(dashboardStats?.recentUsers && dashboardStats.recentUsers.length > 0
+                      ? dashboardStats.recentUsers
+                      : displayUsers.slice(0, 5)
+                    ).map((u) => (
                       <div key={u.id} className="admin-mini-item">
                         <div className="mini-item-left">
                           <span className={`role-badge ${u.role === 'admin' ? 'admin' : 'user'}`}>
@@ -492,9 +633,73 @@ export const AdminDashboardPage: React.FC<{ defaultCategory?: AdminCategory }> =
                           </span>
                           <span className="mini-title">{u.nickname || u.username}</span>
                         </div>
-                        <span className="text-muted">{u.email}</span>
+                        <div className="mini-item-right">
+                          <span className="text-muted">{u.email}</span>
+                          {u.joinedAt && <small className="text-muted">{u.joinedAt}</small>}
+                        </div>
                       </div>
                     ))}
+                  </div>
+                </div>
+              </div>
+
+              {/* 최근 작성 댓글 & Supabase 데이터베이스 상세 정보 */}
+              <div className="admin-split-grid" style={{ marginTop: '1.5rem' }}>
+                <div className="admin-card">
+                  <div className="admin-card-title-row">
+                    <h3>최근 작성 댓글 (Supabase DB)</h3>
+                    <button onClick={() => handleSelectCategory('comments')} className="link-btn">
+                      전체 관리 &rarr;
+                    </button>
+                  </div>
+                  <div className="admin-mini-list">
+                    {((dashboardStats?.recentComments && dashboardStats.recentComments.length > 0)
+                      ? dashboardStats.recentComments
+                      : (comments.slice(0, 5) as any[])
+                    ).length === 0 ? (
+                      <p style={{ color: '#94a3b8', fontSize: '0.9rem', padding: '1rem 0' }}>등록된 댓글이 없습니다.</p>
+                    ) : (
+                      ((dashboardStats?.recentComments && dashboardStats.recentComments.length > 0)
+                        ? dashboardStats.recentComments
+                        : (comments.slice(0, 5) as any[])
+                      ).map((c: any) => (
+                        <div key={c.id} className="admin-mini-item">
+                          <div className="mini-item-left">
+                            <span style={{ fontWeight: 600, color: '#0f172a' }}>{c.author}</span>
+                            <span className="mini-title" style={{ maxWidth: '200px', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>
+                              {c.content}
+                            </span>
+                          </div>
+                          <div className="mini-item-right">
+                            <span className="text-muted">{c.createdAt}</span>
+                          </div>
+                        </div>
+                      ))
+                    )}
+                  </div>
+                </div>
+
+                <div className="admin-card">
+                  <div className="admin-card-title-row">
+                    <h3>데이터베이스 상태 (Supabase PostgreSQL)</h3>
+                    <span className="badge-status-online">🟢 Live Connected</span>
+                  </div>
+                  <div className="db-info-grid">
+                    <div className="db-stat-box">
+                      <span>저장소 엔진</span>
+                      <strong>Supabase PostgreSQL (Cloud)</strong>
+                    </div>
+                    <div className="db-stat-box">
+                      <span>총 데이터 레코드</span>
+                      <strong>{(currentTotalPosts + currentTotalUsers + currentTotalComments).toLocaleString()}건</strong>
+                    </div>
+                    <div className="db-stat-box">
+                      <span>보안 메커니즘</span>
+                      <strong>RLS + bcrypt + 24h 세션</strong>
+                    </div>
+                  </div>
+                  <div style={{ marginTop: '1rem', padding: '0.75rem', backgroundColor: '#f8fafc', borderRadius: '8px', fontSize: '0.85rem', color: '#475569' }}>
+                    🌐 <strong>엔드포인트:</strong> <code>https://wfvmnouudayelbbomgzs.supabase.co</code>
                   </div>
                 </div>
               </div>
@@ -1302,10 +1507,10 @@ export const AdminDashboardPage: React.FC<{ defaultCategory?: AdminCategory }> =
                     <span className="env-val"><code>5000</code></span>
                     <span className="env-desc">Express 백엔드 서버 구동 포트</span>
                   </div>
-                  <div className="env-row">
-                    <span className="env-key">DB_PATH</span>
-                    <span className="env-val"><code>./database.sqlite</code></span>
-                    <span className="env-desc">SQLite 데이터베이스 저장 파일</span>
+                  <div className="env-row highlight">
+                    <span className="env-key">SUPABASE_URL</span>
+                    <span className="env-val"><code>https://wfvmnouudayelbbomgzs.supabase.co</code></span>
+                    <span className="env-desc">Supabase Cloud PostgreSQL 데이터베이스 주소</span>
                   </div>
                   <div className="env-row">
                     <span className="env-key">CLIENT_URL</span>
@@ -1323,6 +1528,11 @@ export const AdminDashboardPage: React.FC<{ defaultCategory?: AdminCategory }> =
                     <span className="env-desc">.env 지정 최고관리자 표시명</span>
                   </div>
                   <div className="env-row highlight">
+                    <span className="env-key">SESSION_EXPIRY</span>
+                    <span className="env-val"><code>24h (24시간 자동 만료)</code></span>
+                    <span className="env-desc">로그인 후 24시간 유지 후 자동 로그아웃 정책</span>
+                  </div>
+                  <div className="env-row highlight">
                     <span className="env-key">JWT_SECRET</span>
                     <span className="env-val"><code>sup***cure!</code></span>
                     <span className="env-desc">세션 토큰 암호화 서명 시크릿 키</span>
@@ -1336,19 +1546,22 @@ export const AdminDashboardPage: React.FC<{ defaultCategory?: AdminCategory }> =
               </div>
 
               <div className="admin-card" style={{ marginTop: '1.5rem' }}>
-                <h3>데이터베이스 상태 (SQLite)</h3>
+                <div className="admin-card-title-row">
+                  <h3>데이터베이스 상태 (Supabase PostgreSQL)</h3>
+                  <span className="badge-status-online">🟢 Live Connected</span>
+                </div>
                 <div className="db-info-grid">
                   <div className="db-stat-box">
                     <span>저장소 엔진</span>
-                    <strong>SQLite 3 (better-sqlite3)</strong>
+                    <strong>Supabase PostgreSQL 15+ (Cloud)</strong>
                   </div>
                   <div className="db-stat-box">
-                    <span>저널 모드</span>
-                    <strong>WAL (Write-Ahead Logging)</strong>
+                    <span>총 데이터 레코드</span>
+                    <strong>{(currentTotalPosts + currentTotalUsers + currentTotalComments).toLocaleString()}건</strong>
                   </div>
                   <div className="db-stat-box">
-                    <span>비밀번호 암호화</span>
-                    <strong>bcrypt 해시 적용됨</strong>
+                    <span>보안 정책</span>
+                    <strong>RLS + bcrypt + 24시간 세션</strong>
                   </div>
                 </div>
               </div>

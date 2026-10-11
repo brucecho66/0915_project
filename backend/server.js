@@ -1828,7 +1828,7 @@ app.put('/api/admin/account', authenticateAdmin, async (req, res) => {
   }
 });
 
-// 관리자 대시보드 요약 통계
+// 관리자 대시보드 요약 통계 (Supabase DB 기반 실제 집계)
 app.get('/api/admin/stats', authenticateAdmin, async (req, res) => {
   try {
     const [
@@ -1841,14 +1841,20 @@ app.get('/api/admin/stats', authenticateAdmin, async (req, res) => {
       supabase.from('comments').select('*', { count: 'exact', head: true }),
     ]);
 
-    // 전체 조회수 합계 계산
-    const { data: viewsData } = await supabase.from('posts').select('views');
+    // 전체 조회수 및 좋아요 합계 계산
+    const { data: viewsData } = await supabase.from('posts').select('views, likes, created_at');
     const totalViews = (viewsData || []).reduce((sum, p) => sum + Number(p.views || 0), 0);
+    const totalLikes = (viewsData || []).reduce((sum, p) => sum + Number(p.likes || 0), 0);
+
+    // 오늘 등록된 게시글 계산
+    const todayStart = new Date();
+    todayStart.setHours(0, 0, 0, 0);
+    const todayPosts = (viewsData || []).filter((p) => p.created_at && new Date(p.created_at) >= todayStart).length;
 
     // 최근 게시글 5건
     const { data: recentPostsRaw } = await supabase
       .from('posts')
-      .select('id, title, author, views, likes, created_at')
+      .select('id, title, author, views, likes, is_hidden, created_at')
       .order('id', { ascending: false })
       .limit(5);
 
@@ -1858,31 +1864,56 @@ app.get('/api/admin/stats', authenticateAdmin, async (req, res) => {
       author: p.author,
       views: Number(p.views || 0),
       likes: Number(p.likes || 0),
+      isHidden: Boolean(p.is_hidden),
       createdAt: formatDate(p.created_at),
     }));
 
     // 최근 회원 5명
     const { data: recentUsersRaw } = await supabase
       .from('users')
-      .select('id, email, username, role, created_at')
+      .select('id, email, username, nickname, name, role, created_at')
       .order('id', { ascending: false })
       .limit(5);
+
+    const todayUsers = (recentUsersRaw || []).filter((u) => u.created_at && new Date(u.created_at) >= todayStart).length;
 
     const recentUsers = (recentUsersRaw || []).map((u) => ({
       id: u.id,
       email: u.email,
       username: u.username,
+      nickname: u.nickname || u.username,
       role: u.role,
       joinedAt: formatDate(u.created_at),
     }));
 
+    // 최근 댓글 5건
+    const { data: recentCommentsRaw } = await supabase
+      .from('comments')
+      .select('id, post_id, author, content, created_at')
+      .order('id', { ascending: false })
+      .limit(5);
+
+    const recentComments = (recentCommentsRaw || []).map((c) => ({
+      id: c.id,
+      postId: c.post_id,
+      author: c.author,
+      content: c.content,
+      createdAt: formatDate(c.created_at),
+    }));
+
     res.json({
+      success: true,
       totalUsers: totalUsers || 0,
       totalPosts: totalPosts || 0,
       totalComments: totalComments || 0,
       totalViews,
+      totalLikes,
+      todayPosts,
+      todayUsers,
       recentPosts,
       recentUsers,
+      recentComments,
+      dbProvider: 'Supabase PostgreSQL (Cloud)',
     });
   } catch (error) {
     console.error('통계 조회 에러:', error);

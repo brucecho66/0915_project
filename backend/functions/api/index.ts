@@ -1288,7 +1288,7 @@ const adminAccountUpdateHandler = async (c: any) => {
 app.put("/admin/account", adminAccountUpdateHandler);
 app.put("/api/admin/account", adminAccountUpdateHandler);
 
-// 관리자 대시보드 통계
+// 관리자 대시보드 통계 (Supabase DB 기반 실제 집계)
 const adminStatsHandler = async (c: any) => {
   try {
     const admin = getAdminFromToken(c.req.header("Authorization"));
@@ -1299,38 +1299,70 @@ const adminStatsHandler = async (c: any) => {
       supabase.from("users").select("id", { count: "exact", head: true }),
       supabase.from("posts").select("id", { count: "exact", head: true }),
       supabase.from("comments").select("id", { count: "exact", head: true }),
-      supabase.from("posts").select("views, likes"),
+      supabase.from("posts").select("views, likes, created_at"),
     ]);
 
     let totalViews = 0;
     let totalLikes = 0;
+    const todayStart = new Date();
+    todayStart.setHours(0, 0, 0, 0);
+    let todayPosts = 0;
+
     if (postsData.data) {
       postsData.data.forEach((p: any) => {
         totalViews += Number(p.views || 0);
         totalLikes += Number(p.likes || 0);
+        if (p.created_at && new Date(p.created_at) >= todayStart) {
+          todayPosts += 1;
+        }
       });
     }
 
     const { data: recentPosts } = await supabase
       .from("posts")
-      .select("id, title, author, views, likes, created_at")
+      .select("id, title, author, views, likes, is_hidden, created_at")
       .order("id", { ascending: false })
       .limit(5);
 
     const { data: recentUsers } = await supabase
       .from("users")
-      .select("id, email, username, role, created_at")
+      .select("id, email, username, nickname, role, created_at")
+      .order("id", { ascending: false })
+      .limit(5);
+
+    const todayUsers = (recentUsers || []).filter((u: any) => u.created_at && new Date(u.created_at) >= todayStart).length;
+
+    const { data: recentComments } = await supabase
+      .from("comments")
+      .select("id, post_id, author, content, created_at")
       .order("id", { ascending: false })
       .limit(5);
 
     return c.json({
+      success: true,
       totalUsers: usersCount.count || 0,
       totalPosts: postsCount.count || 0,
       totalComments: commentsCount.count || 0,
       totalViews,
       totalLikes,
-      recentPosts: (recentPosts || []).map((p: any) => ({ ...p, createdAt: formatDate(p.created_at) })),
-      recentUsers: (recentUsers || []).map((u: any) => ({ ...u, joinedAt: formatDate(u.created_at) })),
+      todayPosts,
+      todayUsers,
+      recentPosts: (recentPosts || []).map((p: any) => ({
+        ...p,
+        isHidden: Boolean(p.is_hidden),
+        createdAt: formatDate(p.created_at),
+      })),
+      recentUsers: (recentUsers || []).map((u: any) => ({
+        ...u,
+        nickname: u.nickname || u.username,
+        joinedAt: formatDate(u.created_at),
+      })),
+      recentComments: (recentComments || []).map((comm: any) => ({
+        ...comm,
+        postId: comm.post_id,
+        createdAt: formatDate(comm.created_at),
+      })),
+      dbProvider: "Supabase PostgreSQL (Cloud)",
     });
   } catch {
     return c.json({ error: "통계 조회 실패" }, 500);

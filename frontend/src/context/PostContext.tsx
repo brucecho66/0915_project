@@ -14,6 +14,87 @@ export interface UpdateAdminParams {
   newPassword?: string;
 }
 
+// 24시간 세션 유효 기간 (밀리초: 24시간 = 86,400,000ms)
+export const SESSION_DURATION_MS = 24 * 60 * 60 * 1000;
+
+export const getSessionExpiresAt = (): number | null => {
+  try {
+    const saved = localStorage.getItem('session_expires_at');
+    if (!saved) return null;
+    const num = Number(saved);
+    return isNaN(num) ? null : num;
+  } catch {
+    return null;
+  }
+};
+
+export const isSessionValid = (): boolean => {
+  const expiresAt = getSessionExpiresAt();
+  if (!expiresAt) {
+    // 세션 만료 시점이 저장되어 있지 않다면 만료로 간주하여 24시간 규칙 강제
+    return false;
+  }
+  return Date.now() < expiresAt;
+};
+
+export const initSessionTimeout = (): number => {
+  const expiresAt = Date.now() + SESSION_DURATION_MS;
+  localStorage.setItem('session_expires_at', String(expiresAt));
+  localStorage.setItem('session_login_at', String(Date.now()));
+  return expiresAt;
+};
+
+export const clearSessionStorage = () => {
+  localStorage.removeItem('user_data');
+  localStorage.removeItem('user');
+  localStorage.removeItem('user_token');
+  localStorage.removeItem('admin_user');
+  localStorage.removeItem('admin_token');
+  localStorage.removeItem('session_expires_at');
+  localStorage.removeItem('session_login_at');
+  try {
+    supabase.auth.signOut();
+  } catch (err) {
+    console.warn('Supabase sign out error:', err);
+  }
+};
+
+export interface AdminDashboardStats {
+  totalUsers: number;
+  totalPosts: number;
+  totalComments: number;
+  totalViews: number;
+  totalLikes: number;
+  todayPosts: number;
+  todayUsers: number;
+  recentPosts: Array<{
+    id: number;
+    title: string;
+    author: string;
+    views: number;
+    likes: number;
+    isHidden?: boolean;
+    createdAt: string;
+  }>;
+  recentUsers: Array<{
+    id: number | string;
+    email: string;
+    username: string;
+    nickname?: string;
+    role: string;
+    joinedAt: string;
+  }>;
+  recentComments: Array<{
+    id: number;
+    postId?: number;
+    author: string;
+    content: string;
+    createdAt: string;
+  }>;
+  dbStatus: 'connected' | 'error' | 'loading';
+  lastUpdated: string;
+}
+
 interface PostContextType {
   posts: Post[];
   user: User | null;
@@ -23,6 +104,11 @@ interface PostContextType {
   users: User[];
   comments: AdminComment[];
   isLoadingPosts: boolean;
+  sessionExpiresAt: number | null;
+  sessionRemainingMinutes: number;
+  dashboardStats: AdminDashboardStats | null;
+  isLoadingDashboardStats: boolean;
+  fetchDashboardStats: () => Promise<AdminDashboardStats | null>;
   fetchPosts: () => Promise<void>;
   fetchPostDetail: (id: number) => Promise<Post | undefined>;
   fetchUsers: () => Promise<void>;
@@ -80,8 +166,18 @@ export const PostProvider: React.FC<{ children: React.ReactNode }> = ({ children
   const [posts, setPosts] = useState<Post[]>([]);
   const [isLoadingPosts, setIsLoadingPosts] = useState<boolean>(true);
 
-  // 일반 사용자 세션 및 JWT 토큰
+  // 24시간 세션 만료 시점 관리
+  const [sessionExpiresAt, setSessionExpiresAt] = useState<number | null>(() => {
+    if (!isSessionValid()) {
+      clearSessionStorage();
+      return null;
+    }
+    return getSessionExpiresAt();
+  });
+
+  // 일반 사용자 세션 및 JWT 토큰 (24시간 만료 검증 적용)
   const [user, setUser] = useState<User | null>(() => {
+    if (!isSessionValid()) return null;
     try {
       const saved = localStorage.getItem('user_data');
       if (saved && saved !== 'undefined') return JSON.parse(saved);
@@ -92,12 +188,14 @@ export const PostProvider: React.FC<{ children: React.ReactNode }> = ({ children
   });
 
   const [userToken, setUserToken] = useState<string | null>(() => {
+    if (!isSessionValid()) return null;
     const saved = localStorage.getItem('user_token');
     return saved && saved !== 'undefined' ? saved : null;
   });
 
-  // 관리자 세션 및 JWT 토큰
+  // 관리자 세션 및 JWT 토큰 (24시간 만료 검증 적용)
   const [adminUser, setAdminUser] = useState<User | null>(() => {
+    if (!isSessionValid()) return null;
     try {
       const saved = localStorage.getItem('admin_user');
       if (saved && saved !== 'undefined') return JSON.parse(saved);
@@ -113,10 +211,23 @@ export const PostProvider: React.FC<{ children: React.ReactNode }> = ({ children
   });
 
   const [adminToken, setAdminToken] = useState<string | null>(() => {
+    if (!isSessionValid()) return null;
     const saved = localStorage.getItem('admin_token');
     if (saved && saved !== 'undefined') return saved;
     const userTok = localStorage.getItem('user_token');
     return userTok && userTok !== 'undefined' ? userTok : null;
+  });
+
+  // 관리자 대시보드 Supabase DB 실시간 통계 상태
+  const [dashboardStats, setDashboardStats] = useState<AdminDashboardStats | null>(null);
+  const [isLoadingDashboardStats, setIsLoadingDashboardStats] = useState<boolean>(false);
+
+  // 남은 세션 시간(분) 실시간 계산
+  const [sessionRemainingMinutes, setSessionRemainingMinutes] = useState<number>(() => {
+    const expires = getSessionExpiresAt();
+    if (!expires) return 0;
+    const diff = expires - Date.now();
+    return diff > 0 ? Math.floor(diff / (60 * 1000)) : 0;
   });
 
   // 관리자 회원 및 댓글 관리 상태
@@ -170,6 +281,153 @@ export const PostProvider: React.FC<{ children: React.ReactNode }> = ({ children
       localStorage.removeItem('admin_token');
     }
   }, [adminToken]);
+
+  // 24시간 세션 만료 실시간 모니터링 (1분 주기 검사, 24시간 도달 시 자동 로그아웃)
+  useEffect(() => {
+    if (!user && !adminUser) return;
+
+    const checkSessionExpiry = () => {
+      const expires = getSessionExpiresAt();
+      if (!expires || Date.now() >= expires) {
+        console.warn('[세션 만료] 로그인 유지 시간(24시간)이 경과하여 자동 로그아웃됩니다.');
+        alert('로그인 세션(24시간)이 만료되었습니다.\n정보 보호를 위해 자동 로그아웃됩니다. 다시 로그인해 주세요.');
+        clearSessionStorage();
+        setUser(null);
+        setUserToken(null);
+        setAdminUser(null);
+        setAdminToken(null);
+        setSessionExpiresAt(null);
+        setSessionRemainingMinutes(0);
+      } else {
+        const diff = expires - Date.now();
+        setSessionRemainingMinutes(Math.max(0, Math.floor(diff / (60 * 1000))));
+      }
+    };
+
+    checkSessionExpiry();
+    const interval = setInterval(checkSessionExpiry, 60 * 1000);
+    return () => clearInterval(interval);
+  }, [user, adminUser]);
+
+  // 관리자 대시보드 실시간 Supabase DB 통계 조회 (하이브리드: API + Supabase 직접 쿼리)
+  const fetchDashboardStats = useCallback(async (): Promise<AdminDashboardStats | null> => {
+    setIsLoadingDashboardStats(true);
+    const token = adminToken || userToken || localStorage.getItem('admin_token') || localStorage.getItem('user_token');
+
+    try {
+      let data: any = null;
+
+      // 1. 백엔드 API /admin/stats 호출 시도
+      try {
+        const res = await fetch(`${API_BASE}/admin/stats`, {
+          headers: token ? { Authorization: `Bearer ${token}` } : {},
+        });
+        if (res.ok) {
+          data = await res.json();
+        }
+      } catch (e) {
+        console.warn('API /admin/stats 조회 실패, Supabase 직접 연동으로 폴백:', e);
+      }
+
+      // 2. 백엔드 응답이 없거나 실패한 경우 Supabase 클라이언트로 실시간 직접 쿼리
+      if (!data || typeof data.totalUsers !== 'number') {
+        const [usersRes, postsRes, commentsRes, postsViewsLikes] = await Promise.all([
+          supabase.from('users').select('*', { count: 'exact' }),
+          supabase.from('posts').select('*', { count: 'exact' }),
+          supabase.from('comments').select('*', { count: 'exact' }),
+          supabase.from('posts').select('id, views, likes, created_at'),
+        ]);
+
+        const todayStart = new Date();
+        todayStart.setHours(0, 0, 0, 0);
+
+        const postsList = postsViewsLikes.data || [];
+        const totalViews = postsList.reduce((sum: number, p: any) => sum + Number(p.views || 0), 0);
+        const totalLikes = postsList.reduce((sum: number, p: any) => sum + Number(p.likes || 0), 0);
+        const todayPosts = postsList.filter((p: any) => p.created_at && new Date(p.created_at) >= todayStart).length;
+
+        // 최근 게시글 5건
+        const { data: recentPostsRaw } = await supabase
+          .from('posts')
+          .select('id, title, author, views, likes, is_hidden, created_at')
+          .order('id', { ascending: false })
+          .limit(5);
+
+        // 최근 가입 회원 5명
+        const { data: recentUsersRaw } = await supabase
+          .from('users')
+          .select('id, email, username, nickname, role, created_at')
+          .order('id', { ascending: false })
+          .limit(5);
+
+        const todayUsers = (recentUsersRaw || []).filter((u: any) => u.created_at && new Date(u.created_at) >= todayStart).length;
+
+        // 최근 댓글 5건
+        const { data: recentCommentsRaw } = await supabase
+          .from('comments')
+          .select('id, post_id, author, content, created_at')
+          .order('id', { ascending: false })
+          .limit(5);
+
+        data = {
+          totalUsers: usersRes.count ?? (usersRes.data?.length || 0),
+          totalPosts: postsRes.count ?? (postsRes.data?.length || 0),
+          totalComments: commentsRes.count ?? (commentsRes.data?.length || 0),
+          totalViews,
+          totalLikes,
+          todayPosts,
+          todayUsers,
+          recentPosts: (recentPostsRaw || []).map((p: any) => ({
+            id: p.id,
+            title: p.title,
+            author: p.author,
+            views: Number(p.views || 0),
+            likes: Number(p.likes || 0),
+            isHidden: Boolean(p.is_hidden),
+            createdAt: p.created_at ? new Date(p.created_at).toISOString().split('T')[0] : '',
+          })),
+          recentUsers: (recentUsersRaw || []).map((u: any) => ({
+            id: u.id,
+            email: u.email,
+            username: u.username,
+            nickname: u.nickname || u.username,
+            role: u.role,
+            joinedAt: u.created_at ? new Date(u.created_at).toISOString().split('T')[0] : '',
+          })),
+          recentComments: (recentCommentsRaw || []).map((c: any) => ({
+            id: c.id,
+            postId: c.post_id,
+            author: c.author,
+            content: c.content,
+            createdAt: c.created_at ? new Date(c.created_at).toISOString().split('T')[0] : '',
+          })),
+        };
+      }
+
+      const formatted: AdminDashboardStats = {
+        totalUsers: Number(data.totalUsers || 0),
+        totalPosts: Number(data.totalPosts || 0),
+        totalComments: Number(data.totalComments || 0),
+        totalViews: Number(data.totalViews || 0),
+        totalLikes: Number(data.totalLikes || 0),
+        todayPosts: Number(data.todayPosts || 0),
+        todayUsers: Number(data.todayUsers || 0),
+        recentPosts: Array.isArray(data.recentPosts) ? data.recentPosts : [],
+        recentUsers: Array.isArray(data.recentUsers) ? data.recentUsers : [],
+        recentComments: Array.isArray(data.recentComments) ? data.recentComments : [],
+        dbStatus: 'connected',
+        lastUpdated: new Date().toLocaleTimeString('ko-KR', { hour: '2-digit', minute: '2-digit', second: '2-digit' }),
+      };
+
+      setDashboardStats(formatted);
+      return formatted;
+    } catch (err) {
+      console.error('Supabase 대시보드 통계 조회 에러:', err);
+      return null;
+    } finally {
+      setIsLoadingDashboardStats(false);
+    }
+  }, [adminToken, userToken]);
 
   // ==========================================
   // [1. 게시글 실제 DB API 연동]
@@ -477,7 +735,7 @@ export const PostProvider: React.FC<{ children: React.ReactNode }> = ({ children
   // [2. 사용자 인증 API (실제 DB 연동)]
   // ==========================================
 
-  // 로그인 (실제 Supabase 사용자 검증)
+  // 로그인 (실제 Supabase 사용자 검증 + 24시간 세션 발급)
   const login = async (email: string, password: string): Promise<{ success: boolean; message?: string }> => {
     try {
       const res = await fetch(`${API_BASE}/auth/login`, {
@@ -488,6 +746,10 @@ export const PostProvider: React.FC<{ children: React.ReactNode }> = ({ children
 
       const data = await res.json();
       if (res.ok && data.success) {
+        const exp = initSessionTimeout();
+        setSessionExpiresAt(exp);
+        setSessionRemainingMinutes(24 * 60);
+
         setUser(data.user);
         setUserToken(data.token);
         if (data.user.role === 'admin') {
@@ -503,7 +765,7 @@ export const PostProvider: React.FC<{ children: React.ReactNode }> = ({ children
     }
   };
 
-  // 회원가입 (실제 Supabase 사용자 등록 및 name, phone, bio, avatarUrl 동기화)
+  // 회원가입 (실제 Supabase 사용자 등록 및 24시간 세션 발급)
   const register = async (
     email: string,
     username: string,
@@ -531,6 +793,10 @@ export const PostProvider: React.FC<{ children: React.ReactNode }> = ({ children
 
       const data = await res.json();
       if (res.ok && data.success) {
+        const exp = initSessionTimeout();
+        setSessionExpiresAt(exp);
+        setSessionRemainingMinutes(24 * 60);
+
         setUser(data.user);
         setUserToken(data.token);
         return { success: true };
@@ -542,12 +808,15 @@ export const PostProvider: React.FC<{ children: React.ReactNode }> = ({ children
     }
   };
 
-  const logout = () => {
+  const logout = useCallback(() => {
+    clearSessionStorage();
     setUser(null);
     setUserToken(null);
     setAdminUser(null);
     setAdminToken(null);
-  };
+    setSessionExpiresAt(null);
+    setSessionRemainingMinutes(0);
+  }, []);
 
   // 카카오톡 소셜 로그인 연동
   const loginWithKakao = async (): Promise<{ success: boolean; message?: string }> => {
@@ -608,6 +877,10 @@ export const PostProvider: React.FC<{ children: React.ReactNode }> = ({ children
 
       const data = await res.json();
       if (res.ok && data.success) {
+        const exp = initSessionTimeout();
+        setSessionExpiresAt(exp);
+        setSessionRemainingMinutes(24 * 60);
+
         const loggedAdmin: User = {
           id: data.admin.id || 1,
           email: data.admin.email,
@@ -629,7 +902,7 @@ export const PostProvider: React.FC<{ children: React.ReactNode }> = ({ children
     }
   };
 
-  // 일반 회원 상태에서 관리자 계정으로 즉시 전환
+  // 일반 회원 상태에서 관리자 계정으로 즉시 전환 (24시간 세션 발급)
   const switchToAdmin = async (): Promise<{ success: boolean; message?: string }> => {
     try {
       const res = await fetch(`${API_BASE}/auth/switch-to-admin`, {
@@ -637,6 +910,10 @@ export const PostProvider: React.FC<{ children: React.ReactNode }> = ({ children
       });
       const data = await res.json();
       if (res.ok && data.success) {
+        const exp = initSessionTimeout();
+        setSessionExpiresAt(exp);
+        setSessionRemainingMinutes(24 * 60);
+
         setAdminUser(data.admin);
         setAdminToken(data.token);
         setUser(data.admin);
@@ -650,7 +927,7 @@ export const PostProvider: React.FC<{ children: React.ReactNode }> = ({ children
     }
   };
 
-  // 관리자 상태에서 일반 테스트 계정으로 즉시 전환
+  // 관리자 상태에서 일반 테스트 계정으로 즉시 전환 (24시간 세션 발급)
   const switchToUser = async (): Promise<{ success: boolean; message?: string }> => {
     try {
       const res = await fetch(`${API_BASE}/auth/switch-to-user`, {
@@ -658,6 +935,10 @@ export const PostProvider: React.FC<{ children: React.ReactNode }> = ({ children
       });
       const data = await res.json();
       if (res.ok && data.success) {
+        const exp = initSessionTimeout();
+        setSessionExpiresAt(exp);
+        setSessionRemainingMinutes(24 * 60);
+
         setAdminUser(null);
         setAdminToken(null);
         setUser(data.user);
@@ -926,12 +1207,15 @@ export const PostProvider: React.FC<{ children: React.ReactNode }> = ({ children
     }
   };
 
-  const adminLogout = () => {
+  const adminLogout = useCallback(() => {
+    clearSessionStorage();
     setAdminUser(null);
     setAdminToken(null);
     setUser(null);
     setUserToken(null);
-  };
+    setSessionExpiresAt(null);
+    setSessionRemainingMinutes(0);
+  }, []);
 
   return (
     <PostContext.Provider
@@ -944,6 +1228,11 @@ export const PostProvider: React.FC<{ children: React.ReactNode }> = ({ children
         users,
         comments,
         isLoadingPosts,
+        sessionExpiresAt,
+        sessionRemainingMinutes,
+        dashboardStats,
+        isLoadingDashboardStats,
+        fetchDashboardStats,
         fetchPosts,
         fetchPostDetail,
         fetchUsers,
